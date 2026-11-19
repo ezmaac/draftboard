@@ -45,7 +45,7 @@ function sampleSchedule(seasonStartYear = 2026) {
     prev = Math.round((d - start) / 86400000);
     const dow = d.getUTCDay();
     const time = dow === 6 ? '19:00' : dow === 0 ? (rand() < 0.5 ? '17:00' : '19:00') : rand() < 0.75 ? '19:00' : '19:30';
-    games.push({ date: iso(d), time, opponent: opponents[i], notes: '' });
+    games.push({ date: iso(d), time, opponent: opponents[i], type: 'regular', price: null, notes: '' });
   }
   return games;
 }
@@ -82,46 +82,96 @@ function normTime(t) {
   return `${String(h).padStart(2, '0')}:${min}`;
 }
 
+const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const pad = n => String(n).padStart(2, '0');
+const year = y => (String(y).length === 2 ? `20${y}` : String(y));
+
 function normDate(s) {
   s = String(s || '').trim();
-  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+  m = s.match(/^(\d{1,2})[-\s]([a-z]{3})[a-z]*[-\s,]+(\d{2,4})$/i); // 29-Sep-26
+  if (m && MON[m[2].toLowerCase()]) return `${year(m[3])}-${pad(MON[m[2].toLowerCase()])}-${pad(m[1])}`;
+  m = s.match(/^([a-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{2,4})$/i); // Sep 29, 2026
+  if (m && MON[m[1].toLowerCase()]) return `${year(m[3])}-${pad(MON[m[1].toLowerCase()])}-${pad(m[2])}`;
   m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); // MM/DD/YYYY
-  if (m) {
-    const y = m[3].length === 2 ? `20${m[3]}` : m[3];
-    return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
-  }
-  const d = new Date(s);
-  return isNaN(d) ? null : iso(d);
+  if (m) return `${year(m[3])}-${pad(m[1])}-${pad(m[2])}`;
+  return null;
+}
+
+function normType(s) {
+  s = String(s || '').toLowerCase();
+  if (/pre|exhib/.test(s)) return 'preseason';
+  if (/playoff|post/.test(s)) return 'playoff';
+  return 'regular';
+}
+
+function normPrice(s) {
+  const n = parseFloat(String(s || '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Parse "1:23", "83", "1:02:03" into seconds. */
+function normSeconds(s) {
+  s = String(s ?? '').trim();
+  if (!s) return null;
+  const parts = s.split(':').map(Number);
+  if (parts.some(n => !Number.isFinite(n))) return null;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
 }
 
 /**
- * Parse CSV text with a header row containing at least `date` and `opponent`
- * (optional `time`, `notes`). Rows that are away games (opponent column starting
- * with "@" or containing "at ") are skipped. Returns { games, errors }.
+ * Read CSV text into { header, rows } where the header is the first row that
+ * contains all of `required` (so leading blank rows are fine). Columns are
+ * looked up by exact name first, then by substring.
+ */
+function readCsv(text, required) {
+  const lines = String(text).replace(/^﻿/, '').split(/\r?\n/);
+  let hi = -1, header = [];
+  for (let i = 0; i < Math.min(lines.length, 20); i++) {
+    const cells = splitCsv(lines[i]).map(h => h.toLowerCase());
+    if (required.every(alts => alts.some(a => cells.some(c => c === a || c.includes(a))))) { hi = i; header = cells; break; }
+  }
+  if (hi < 0) return null;
+  const col = (...alts) => {
+    for (const a of alts) { const i = header.indexOf(a); if (i >= 0) return i; }
+    for (const a of alts) { const i = header.findIndex(h => h.includes(a)); if (i >= 0) return i; }
+    return -1;
+  };
+  const rows = lines.slice(hi + 1).map((l, n) => ({ line: hi + n + 2, cells: splitCsv(l) }))
+    .filter(r => r.cells.some(c => c));
+  return { col, rows };
+}
+
+/**
+ * Parse a schedule CSV. Needs `date` and an opponent column (`opponent` or
+ * `team`); optional `time`, `type` (Regular Season / Pre-Season / Playoffs),
+ * `price`, `notes`. Away games (opponent starting with "@" / "at ") are skipped.
  */
 function parseScheduleCsv(text) {
-  const lines = String(text).split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return { games: [], errors: ['CSV is empty'] };
-  const header = splitCsv(lines[0]).map(h => h.toLowerCase());
-  const col = name => header.findIndex(h => h.includes(name));
-  const iDate = col('date'), iOpp = col('opp') >= 0 ? col('opp') : col('team');
-  const iTime = col('time'), iNotes = col('note');
-  if (iDate < 0 || iOpp < 0) return { games: [], errors: ['Header row needs "date" and "opponent" columns'] };
+  const csv = readCsv(text, [['date'], ['opponent', 'team', 'opp']]);
+  if (!csv) return { games: [], errors: ['Could not find a header row with "date" and "team"/"opponent" columns'] };
+  const { col, rows } = csv;
+  const iDate = col('date'), iOpp = col('opponent', 'team', 'opp'), iTime = col('time'),
+    iType = col('type'), iPrice = col('price'), iNotes = col('notes', 'note');
   const games = [], errors = [];
-  lines.slice(1).forEach((line, n) => {
-    const cells = splitCsv(line);
+  for (const { line, cells } of rows) {
     let opp = cells[iOpp] || '';
-    if (/^@|^at\s/i.test(opp)) return; // away game
+    if (!opp && !cells[iDate]) continue;
+    if (/^@|^at\s/i.test(opp)) continue; // away game
     opp = opp.replace(/^vs\.?\s*/i, '');
-    const team = findTeam(opp);
+    const team = /^tbd$/i.test(opp) ? { abbr: 'TBD' } : findTeam(opp);
     const date = normDate(cells[iDate]);
-    if (!team) errors.push(`Row ${n + 2}: unknown opponent "${opp}"`);
-    else if (!date) errors.push(`Row ${n + 2}: bad date "${cells[iDate]}"`);
-    else games.push({ date, time: normTime(iTime >= 0 ? cells[iTime] : ''), opponent: team.abbr, notes: iNotes >= 0 ? cells[iNotes] || '' : '' });
-  });
+    if (!team) errors.push(`Row ${line}: unknown opponent "${opp}"`);
+    else if (!date) errors.push(`Row ${line}: bad date "${cells[iDate]}"`);
+    else games.push({
+      date, time: normTime(iTime >= 0 ? cells[iTime] : ''), opponent: team.abbr,
+      type: normType(iType >= 0 ? cells[iType] : ''), price: iPrice >= 0 ? normPrice(cells[iPrice]) : null,
+      notes: iNotes >= 0 ? cells[iNotes] || '' : '',
+    });
+  }
   games.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   return { games, errors };
 }
 
-module.exports = { sampleSchedule, parseScheduleCsv };
+module.exports = { sampleSchedule, parseScheduleCsv, readCsv, normDate, normTime, normPrice, normType, normSeconds };

@@ -35,15 +35,17 @@ const TEAMS = [
 
 const BY_ABBR = Object.fromEntries(TEAMS.map(t => [t.abbr, t]));
 
+const fold = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+
 function findTeam(input) {
   if (!input) return null;
-  const s = String(input).trim().toLowerCase();
+  const s = fold(input);
   return TEAMS.find(t =>
-    t.abbr.toLowerCase() === s ||
-    t.name.toLowerCase() === s ||
-    `${t.city} ${t.name}`.toLowerCase() === s ||
-    t.city.toLowerCase() === s
-  ) || null;
+    fold(t.abbr) === s ||
+    fold(t.name) === s ||
+    fold(`${t.city} ${t.name}`) === s ||
+    fold(t.city) === s
+  ) || TEAMS.find(t => s.endsWith(fold(t.name))) || null;
 }
 
 module.exports = { TEAMS, BY_ABBR, findTeam };

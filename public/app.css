@@ -159,7 +159,7 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
 .banner .muted { font-weight: 600; font-size: 1rem; }
 
 .board { flex: 1; overflow: auto; display: flex; gap: 6px; padding: 6px; align-items: flex-start; }
-.month { flex: 1 0 168px; min-width: 168px; display: flex; flex-direction: column; gap: 5px; }
+.month { flex: 1 0 168px; min-width: 168px; max-width: 340px; display: flex; flex-direction: column; gap: 5px; }
 .month-head { position: sticky; top: -6px; z-index: 2; background: var(--leafs); color: #fff; text-align: center; font-family: var(--cond); font-weight: 800; font-size: 1.15rem; letter-spacing: .06em; padding: 6px 4px; border-radius: 4px; border-bottom: 2px solid #fff; text-transform: uppercase; }
 .month-head span { font-weight: 600; opacity: .7; font-size: .9rem; margin-left: 4px; }
 
@@ -173,7 +173,9 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
 .card.Central { background: var(--cen); }
 .card.Pacific { background: var(--pac); }
 .card .top { display: flex; justify-content: space-between; font-family: var(--cond); font-weight: 700; font-size: .92rem; text-transform: uppercase; letter-spacing: .02em; }
-.card .city { font-family: var(--cond); font-weight: 600; font-size: .85rem; text-transform: uppercase; margin-top: 2px; opacity: .8; }
+.card .city { display: flex; justify-content: space-between; font-family: var(--cond); font-weight: 600; font-size: .85rem; text-transform: uppercase; margin-top: 2px; }
+.card .city span:first-child { opacity: .8; }
+.card .city span:last-child { font-weight: 700; }
 .card .opp { font-family: var(--cond); font-weight: 800; font-size: 1.55rem; line-height: .95; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .note { font-size: .7rem; font-weight: 700; text-transform: uppercase; margin-top: 2px; }
 .card.selected { border-color: #fff; outline: 3px solid var(--clock); outline-offset: 1px; }
@@ -196,6 +198,26 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
 @keyframes tick { to { transform: translateX(-100%); } }
 
 .board-setup { padding: 30px 16px; text-align: center; }
+
+.clock.warn { color: var(--danger); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .55; } }
+.card.TBD { background: #cfd6e2; }
+.tbadge { display: inline-block; background: var(--card-ink); color: #fff; font-size: .7rem; padding: 0 4px; border-radius: 3px; margin-right: 4px; letter-spacing: .04em; vertical-align: 1px; }
+.card .seats { font-family: var(--cond); font-weight: 700; font-size: .85rem; text-transform: uppercase; margin-top: 3px; }
+.card:not(.taken) .by { color: var(--card-ink); }
+.card:not(.taken) .by .slot { color: rgba(0,0,0,.55); }
+.badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--clock); color: #1a1400; font-size: .75rem; font-weight: 800; margin-left: 2px; }
+.games-table input, .games-table select { padding: 5px 6px; min-width: 90px; }
+.games-table td { padding: 5px 6px; }
+.games-table tfoot td { border-top: 2px solid var(--line); }
+
+/* ---------- trades */
+.trade { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; background: var(--panel-2); }
+.trade-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+.trade-sides .k { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+.trade-sides ul { margin: 4px 0 0; padding-left: 18px; font-size: .92rem; }
+.trade-pick label { font-size: .95rem; }
+@media (max-width: 600px) { .trade-sides { grid-template-columns: 1fr; } }
 
 /* ---------- history */
 .results-grid th, .results-grid td { border: 1px solid var(--line); text-align: center; }

@@ -4,27 +4,40 @@
   const $nav = document.getElementById('topnav');
   const $modal = document.getElementById('modal');
   const $toast = document.getElementById('toast');
+  const BASE_TITLE = 'Leafs Ticket Draft';
 
-  const state = { me: null, teams: [], teamMap: {}, users: [] };
+  const state = { me: null, mailEnabled: false, teams: [], teamMap: {} };
   let cleanup = null; // teardown for the current view (timers, SSE)
+  let routeSeq = 0;   // bumps on every navigation so slow-loading views can tell they're stale
+  /** Register teardown for the view started at `seq`; if the user already navigated away, tear down now. */
+  function own(seq, fn) { if (seq !== routeSeq) { fn(); return; } cleanup = fn; }
 
   // ------------------------------------------------------------ utils
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const TYPE_LABEL = { preseason: 'Preseason', regular: 'Regular season', playoff: 'Playoffs' };
   const parseDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
   const fmtTime = t => { const [h, m] = t.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
   const fmtGameDate = g => { const d = parseDate(g.date); return `${DOW[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`; };
+  const fmtMoney = n => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
   const fmtDur = secs => {
+    if (secs == null) return '—';
     secs = Math.max(0, Math.floor(secs));
     const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
     return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
-  const fmtWhen = ms => new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const fmtWhen = ms => (ms ? new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+  const torontoToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto' }).format(new Date());
   const initials = name => (name || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
-  const avatar = (u, cls = '') => `<span class="avatar ${cls}" style="background:${esc(u.color)}">${esc(initials(u.display_name))}</span>`;
-  const team = abbr => state.teamMap[abbr] || { abbr, city: '', name: abbr, div: 'Metropolitan' };
+  const avatar = (u, cls = '') => `<span class="avatar ${cls}" style="background:${esc(u?.color || '#555')}">${esc(initials(u?.display_name))}</span>`;
+  const team = abbr => state.teamMap[abbr] || { abbr, city: abbr === 'TBD' ? 'To be' : '', name: abbr === 'TBD' ? 'Determined' : abbr, div: 'TBD' };
+  const gameName = g => { const t = team(g.opponent); return `${fmtGameDate(g)} · ${t.city} ${t.name}`; };
+  const pickSeats = s => s.draft.seat_mode === 'single';
+  const seatLabel = p => (p.seat ? ` · seat ${p.seat}` : '');
+  const usersOf = s => Object.fromEntries(s.order.map(o => [o.user_id, { id: o.user_id, display_name: o.display_name, color: o.color }]));
+  const pickValue = (p, g) => (g.price || 0) * (p.seat ? 1 : g.seats);
 
   async function api(method, url, body) {
     const res = await fetch(url, {
@@ -32,14 +45,14 @@
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && !url.startsWith('/api/login')) { state.me = null; location.hash = '#/login'; }
-    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    if (!res.ok) { const e = new Error(data.error || `Request failed (${res.status})`); e.details = data.errors; throw e; }
     return data;
   }
 
   let toastTimer;
   function toast(msg, err = false) {
     $toast.textContent = msg; $toast.className = 'toast' + (err ? ' err' : ''); $toast.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => ($toast.hidden = true), 3200);
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => ($toast.hidden = true), 3600);
   }
 
   function modal(html, onMount) {
@@ -51,19 +64,41 @@
     return close;
   }
 
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.25].forEach(t => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.15, ctx.currentTime + t); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.2);
+        o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.2);
+      });
+    } catch { /* audio unavailable */ }
+  }
+
+  function live(key, fn) {
+    const es = new EventSource(`/api/events/${key}`);
+    es.addEventListener('update', fn);
+    return () => es.close();
+  }
+
   // ------------------------------------------------------------ router
   const routes = [
     [/^#\/login$/, viewLogin, { public: true }],
     [/^#\/?$/, viewHome],
     [/^#\/new$/, viewNewDraft],
+    [/^#\/import$/, viewImport],
     [/^#\/board\/(\d+)$/, viewBoard],
     [/^#\/history$/, viewHistoryIndex],
     [/^#\/history\/(\d+)$/, viewHistory],
+    [/^#\/trades$/, viewTrades],
     [/^#\/profile$/, viewProfile],
   ];
 
   async function route() {
     cleanup?.(); cleanup = null;
+    const seq = ++routeSeq;
+    document.title = BASE_TITLE;
     const hash = location.hash || '#/';
     const match = routes.find(([re]) => re.test(hash));
     if (!match) { location.hash = '#/'; return; }
@@ -73,10 +108,21 @@
     $nav.hidden = !state.me;
     document.querySelectorAll('[data-nav]').forEach(a => {
       const n = a.dataset.nav;
-      a.classList.toggle('active', (n === 'home' && /^#\/?$|^#\/new|^#\/board/.test(hash)) || hash.startsWith(`#/${n}`));
+      a.classList.toggle('active', (n === 'home' && /^#\/?$|^#\/new|^#\/import|^#\/board/.test(hash)) || hash.startsWith(`#/${n}`));
     });
+    if (state.me) updateTradeBadge();
     try { await view(...hash.match(re).slice(1)); }
-    catch (e) { $app.innerHTML = `<div class="page"><div class="panel"><h2>Something went wrong</h2><p class="error">${esc(e.message)}</p><a class="btn" href="#/">Back</a></div></div>`; }
+    catch (e) {
+      if (seq !== routeSeq) return; $app.innerHTML = `<div class="page"><div class="panel"><h2>Something went wrong</h2><p class="error">${esc(e.message)}</p><a class="btn" href="#/">Back</a></div></div>`; }
+  }
+
+  async function updateTradeBadge() {
+    try {
+      const trades = await api('GET', '/api/trades');
+      const n = trades.filter(t => t.status === 'pending' && t.to_user === state.me.id).length;
+      const b = document.getElementById('tradeBadge');
+      b.textContent = n; b.hidden = !n;
+    } catch { /* ignore */ }
   }
 
   // ------------------------------------------------------------ login / register
@@ -93,7 +139,8 @@
           <button type="button" class="btn ${mode === 'register' ? 'on' : ''}" data-mode="register">Sign up</button>
         </div>
         <div class="field"><label>Username</label><input type="text" name="username" required autocomplete="username"></div>
-        ${mode === 'register' ? `<div class="field"><label>Display name</label><input type="text" name="display_name" placeholder="e.g. Mark"></div>` : ''}
+        ${mode === 'register' ? `<div class="field"><label>Display name</label><input type="text" name="display_name" placeholder="e.g. Mark"></div>
+        <div class="field"><label>Email <span class="muted">(for “you’re on the clock” and trade alerts)</span></label><input type="email" name="email" autocomplete="email"></div>` : ''}
         <div class="field"><label>Password</label><input type="password" name="password" required autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></div>
         ${mode === 'register' ? `<div class="field"><label>Invite code</label><input type="text" name="invite_code" required></div>` : ''}
         <p class="error" id="authErr"></p>
@@ -114,28 +161,37 @@
 
   // ------------------------------------------------------------ home (drafts list)
   async function viewHome() {
-    const drafts = await api('GET', '/api/drafts');
+        const seq = routeSeq;
+const [drafts, users] = await Promise.all([api('GET', '/api/drafts'), api('GET', '/api/users')]);
+    if (seq !== routeSeq) return;
+    const userMap = Object.fromEntries(users.map(u => [u.id, u]));
     const isAdmin = state.me.is_admin;
-    const item = d => `
+    const item = d => {
+      const oc = d.on_clock && userMap[d.on_clock.user_id];
+      return `
       <div class="draft-item">
         <div>
-          <div class="title">${esc(d.name)} <span class="pill ${d.status}">${d.status}</span></div>
-          <div class="muted small">${esc(d.season)} · ${d.game_count} games · ${d.order_type} order · ${d.pick_count}/${d.game_count} picked</div>
+          <div class="title">${esc(d.name)} <span class="pill ${d.status}">${d.status}</span>
+            <span class="pill setup">${d.kind === 'playoff' ? 'Playoffs · single seats' : 'Season'}</span>
+            ${d.mode === 'async' ? '<span class="pill setup">✉ by email</span>' : ''}${d.source === 'import' ? '<span class="pill setup">imported</span>' : ''}</div>
+          <div class="muted small">${esc(d.season)} · ${d.game_count} games · ${d.order_type} order · ${d.pick_count}/${d.total_picks} picks</div>
+          ${oc ? `<div class="small" style="margin-top:4px">${avatar(oc)} <b>${esc(oc.display_name)}</b> on the clock · R${d.on_clock.round} P${d.on_clock.pick_in_round} · ${fmtDur(d.elapsed_ms / 1000)}</div>` : ''}
         </div>
         <div class="row">
-          ${d.status === 'live' ? `<a class="btn go" href="#/board/${d.id}">Enter draft room</a>` : ''}
+          ${d.status === 'live' ? `<a class="btn go" href="#/board/${d.id}">${d.on_clock?.user_id === state.me.id ? 'Your pick →' : 'Enter draft room'}</a>` : ''}
           ${d.status === 'setup' ? `<a class="btn" href="#/board/${d.id}">Preview board</a>${isAdmin ? `<button class="btn primary" data-start="${d.id}">Start draft</button>` : ''}` : ''}
           ${d.status === 'complete' ? `<a class="btn" href="#/board/${d.id}">Board</a><a class="btn primary" href="#/history/${d.id}">Results</a>` : ''}
-          ${isAdmin && d.status !== 'complete' ? `<button class="btn danger sm" data-del="${d.id}">Delete</button>` : ''}
+          ${isAdmin && (d.status !== 'complete' || d.source === 'import') ? `<button class="btn danger sm" data-del="${d.id}">Delete</button>` : ''}
         </div>
       </div>`;
+    };
     const active = drafts.filter(d => d.status !== 'complete');
     const done = drafts.filter(d => d.status === 'complete');
     $app.innerHTML = `
       <div class="page">
         <div class="row spread" style="margin-bottom:14px">
           <h1 style="margin:0">Hi, ${esc(state.me.display_name)}</h1>
-          ${isAdmin ? `<a class="btn primary" href="#/new">+ New draft</a>` : ''}
+          ${isAdmin ? `<div class="row"><a class="btn" href="#/import">Import past draft</a><a class="btn primary" href="#/new">+ New draft</a></div>` : ''}
         </div>
         <div class="panel">
           <h2>Current drafts</h2>
@@ -155,15 +211,21 @@
       if (!confirm('Delete this draft and all its picks?')) return;
       try { await api('DELETE', `/api/drafts/${b.dataset.del}`); route(); } catch (e) { toast(e.message, true); }
     }));
+    own(seq, live('home', () => { if ($modal.hidden && /^#\/?$/.test(location.hash || '#/')) route(); }));
   }
 
   // ------------------------------------------------------------ new draft (commissioner)
+  const teamOptions = (sel = '') => `<option value="TBD">TBD</option>${state.teams.map(t => `<option value="${t.abbr}" ${t.abbr === sel ? 'selected' : ''}>${esc(t.city)} ${esc(t.name)}</option>`).join('')}`;
+
   async function viewNewDraft() {
     if (!state.me.is_admin) { location.hash = '#/'; return; }
-    const users = await api('GET', '/api/users');
+        const seq = routeSeq;
+const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/schedules')]);
+    if (seq !== routeSeq) return;
     const y = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;
     let order = users.map(u => u.id);
     let games = [];
+    let kind = 'season';
 
     $app.innerHTML = `
       <div class="page">
@@ -171,11 +233,19 @@
         <div class="grid2">
           <div class="panel">
             <h2>Details</h2>
-            <div class="field"><label>Draft name</label><input type="text" id="dName" value="${y}–${String(y + 1).slice(2)} Season Draft"></div>
-            <div class="field"><label>Season</label><input type="text" id="dSeason" value="${y}-${String(y + 1).slice(2)}"></div>
-            <div class="field"><label>Order type</label>
-              <select id="dType"><option value="snake">Snake (1-2-3, 3-2-1 …)</option><option value="linear">Linear (1-2-3, 1-2-3 …)</option></select>
+            <div class="field"><label>Draft type</label>
+              <select id="dKind"><option value="season">Season draft — preseason + regular season, seats as pairs</option>
+              <option value="playoff">Playoff draft — one seat per pick</option></select>
             </div>
+            <div class="field"><label>Draft name</label><input type="text" id="dName"></div>
+            <div class="field"><label>Season</label><input type="text" id="dSeason" value="${y}-${String(y + 1).slice(2)}"></div>
+            <div class="row" style="align-items:flex-start">
+              <div class="field" style="flex:1"><label>Order</label>
+                <select id="dType"><option value="snake">Snake (1-2-3, 3-2-1)</option><option value="linear">Linear (1-2-3, 1-2-3)</option></select></div>
+              <div class="field" style="flex:1"><label>How you’ll draft</label>
+                <select id="dMode"><option value="live">Live — together, now</option><option value="async">By email — over a few days</option></select></div>
+            </div>
+            <div class="field"><label>Clock warning after (minutes, 0 = none — never a hard limit)</label><input type="number" id="dWarn" value="2" min="0" step="0.5"></div>
             <h2 style="margin-top:20px">Partners &amp; order</h2>
             <div class="check-list" id="who"></div>
             <ol class="order-list" id="order"></ol>
@@ -184,24 +254,53 @@
           <div class="panel">
             <h2>Schedule</h2>
             <div class="field"><label>Source</label>
-              <select id="src"><option value="sample">Sample schedule (placeholder)</option><option value="csv">Paste / upload CSV</option></select>
+              <select id="src">
+                ${files.map(f => `<option value="bundled:${esc(f)}">${esc(f.replace(/\.csv$/, '').replace(/_/g, ' '))} (official)</option>`).join('')}
+                <option value="csv">Paste / upload CSV</option>
+                <option value="none">Enter games by hand</option>
+                <option value="sample">Sample schedule (placeholder)</option>
+              </select>
             </div>
-            <div id="sampleOpts" class="field"><label>Season starts (year)</label><input type="number" id="sYear" value="${y}"></div>
+            <div id="sampleOpts" class="field" hidden><label>Season starts (year)</label><input type="number" id="sYear" value="${y}"></div>
             <div id="csvOpts" hidden>
-              <p class="muted small">Columns: <code>date, time, opponent, notes</code>. Away games (opponent starting with “@”) are skipped.</p>
+              <p class="muted small">Needs <code>Date</code> and <code>Team</code>/<code>Opponent</code> columns; <code>Time</code>, <code>Type</code>, <code>Price</code>, <code>Notes</code> optional. Away games (“@ …”) are skipped.</p>
               <input type="file" id="csvFile" accept=".csv,text/csv" style="margin-bottom:8px">
-              <textarea id="csv" placeholder="date,time,opponent,notes&#10;2026-10-07,7:00 PM,Montreal,Home opener&#10;2026-10-10,7:00 PM,BOS,"></textarea>
+              <textarea id="csv" placeholder="Type,Date,Team,Time,Price&#10;Pre-Season,24-Sep-26,Ottawa Senators,7:00 PM,$150"></textarea>
             </div>
             <button class="btn" id="preview">Load schedule</button>
             <p class="error" id="schedErr"></p>
-            <div id="schedPreview" class="small"></div>
+            <div id="schedSummary" class="small"></div>
           </div>
+        </div>
+        <div class="panel">
+          <div class="row spread"><h2 style="margin:0">Games (<span id="gCount">0</span>)</h2><span class="muted small">Review, remove, or add games before creating the draft.</span></div>
+          <div class="table-wrap"><table class="games-table">
+            <thead><tr><th>Date</th><th>Time</th><th>Opponent</th><th>Type</th><th>Price / seat</th><th>Notes</th><th></th></tr></thead>
+            <tbody id="gRows"></tbody>
+            <tfoot><tr>
+              <td><input type="date" id="aDate"></td><td><input type="time" id="aTime" value="19:00"></td>
+              <td><select id="aOpp">${teamOptions()}</select></td>
+              <td><select id="aType"><option value="preseason">Preseason</option><option value="regular" selected>Regular</option><option value="playoff">Playoff</option></select></td>
+              <td><input type="number" id="aPrice" min="0" placeholder="$"></td><td><input type="text" id="aNotes" placeholder="e.g. Rd 1 Gm 2"></td>
+              <td><button class="btn sm" id="addGame">Add</button></td></tr></tfoot>
+          </table></div>
         </div>
         <div class="row"><button class="btn primary" id="create">Create draft</button><a class="btn" href="#/">Cancel</a><span class="error" id="createErr"></span></div>
       </div>`;
 
     const $ = s => $app.querySelector(s);
     const byId = Object.fromEntries(users.map(u => [u.id, u]));
+    const setName = () => { $('#dName').value = `${$('#dSeason').value} ${kind === 'playoff' ? 'Playoff' : 'Season'} Draft`; };
+    setName();
+    $('#dSeason').oninput = setName;
+    $('#dKind').onchange = () => {
+      kind = $('#dKind').value; setName();
+      if (kind === 'playoff') { $('#src').value = 'none'; $('#aType').value = 'playoff'; $('#src').onchange(); games = []; renderGames(); }
+      else $('#aType').value = 'regular';
+      renderSummary();
+    };
+    $('#dMode').onchange = () => { if ($('#dMode').value === 'async') $('#dWarn').value = 0; };
+
     const renderWho = () => {
       $('#who').innerHTML = users.map(u => `<label><input type="checkbox" value="${u.id}" ${order.includes(u.id) ? 'checked' : ''}> ${avatar(u)} ${esc(u.display_name)}</label>`).join('');
       $('#who').querySelectorAll('input').forEach(cb => (cb.onchange = () => {
@@ -218,53 +317,124 @@
         || '<li class="muted">Tick the partners taking part.</li>';
       $('#order').querySelectorAll('[data-up]').forEach(b => (b.onclick = () => { const i = +b.dataset.up; [order[i - 1], order[i]] = [order[i], order[i - 1]]; renderOrder(); }));
       $('#order').querySelectorAll('[data-down]').forEach(b => (b.onclick = () => { const i = +b.dataset.down; [order[i + 1], order[i]] = [order[i], order[i + 1]]; renderOrder(); }));
+      renderSummary();
+    };
+    const renderSummary = () => {
+      const picks = kind === 'playoff' ? games.length * 2 : games.length;
+      const n = order.length;
+      const months = {};
+      games.forEach(g => { const d = parseDate(g.date); const k = `${MONTHS[d.getMonth()]} ${d.getFullYear()}`; months[k] = (months[k] || 0) + 1; });
+      const types = {}; games.forEach(g => (types[g.type] = (types[g.type] || 0) + 1));
+      $('#schedSummary').innerHTML = games.length ? `
+        <p><b>${games.length} home games</b> (${Object.entries(types).map(([t, c]) => `${c} ${TYPE_LABEL[t].toLowerCase()}`).join(', ')})<br>${Object.entries(months).map(([k, v]) => `${k}: ${v}`).join(' · ')}</p>
+        ${n ? `<p class="muted">${picks} picks${kind === 'playoff' ? ' (2 seats per game)' : ''} → ${Math.floor(picks / n)} each${picks % n ? `, plus 1 extra for the first ${picks % n} in the order` : ' — an even split'}.</p>` : ''}
+        ${$('#src').value === 'sample' ? '<p class="error">Sample data only — not the real Leafs schedule.</p>' : ''}` : '<p class="muted">No games yet.</p>';
+    };
+    const renderGames = () => {
+      games.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+      $('#gCount').textContent = games.length;
+      $('#gRows').innerHTML = games.map((g, i) => { const t = team(g.opponent); return `<tr>
+        <td>${fmtGameDate(g)}, ${parseDate(g.date).getFullYear()}</td><td>${fmtTime(g.time)}</td><td>${esc(t.city)} ${esc(t.name)}</td>
+        <td>${TYPE_LABEL[g.type]}</td><td>${fmtMoney(g.price)}</td><td>${esc(g.notes)}</td>
+        <td><button class="icon-btn" data-rm="${i}" title="Remove">✕</button></td></tr>`; }).join('');
+      $('#gRows').querySelectorAll('[data-rm]').forEach(b => (b.onclick = () => { games.splice(+b.dataset.rm, 1); renderGames(); }));
+      renderSummary();
     };
     renderWho(); renderOrder();
     $('#shuffle').onclick = () => { for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; } renderOrder(); };
-    $('#src').onchange = () => { const csv = $('#src').value === 'csv'; $('#csvOpts').hidden = !csv; $('#sampleOpts').hidden = csv; };
+    $('#src').onchange = () => { const v = $('#src').value; $('#csvOpts').hidden = v !== 'csv'; $('#sampleOpts').hidden = v !== 'sample'; $('#preview').hidden = v === 'none'; };
+    $('#src').onchange();
     $('#csvFile').onchange = async e => { const f = e.target.files[0]; if (f) $('#csv').value = await f.text(); };
+    $('#addGame').onclick = () => {
+      if (!$('#aDate').value) { toast('Pick a date', true); return; }
+      games.push({ date: $('#aDate').value, time: $('#aTime').value || '19:00', opponent: $('#aOpp').value, type: $('#aType').value,
+        price: $('#aPrice').value ? Number($('#aPrice').value) : null, notes: $('#aNotes').value });
+      $('#aNotes').value = ''; renderGames();
+    };
 
     const loadSchedule = async () => {
       $('#schedErr').textContent = '';
+      const v = $('#src').value;
       try {
-        const r = await api('POST', '/api/schedule/preview', { source: $('#src').value, csv: $('#csv').value, season_start: $('#sYear').value });
-        games = r.games;
-        const months = {};
-        games.forEach(g => { const d = parseDate(g.date); const k = `${MONTHS[d.getMonth()]} ${d.getFullYear()}`; months[k] = (months[k] || 0) + 1; });
-        $('#schedPreview').innerHTML = `
-          <p><b>${games.length} home games</b> · ${Object.entries(months).map(([k, v]) => `${k}: ${v}`).join(' · ')}</p>
-          ${order.length ? `<p class="muted">${order.length} partners → ${Math.floor(games.length / order.length)} games each${games.length % order.length ? `, ${games.length % order.length} extra going to the first ${games.length % order.length} in the order` : ''}.</p>` : ''}
-          ${$('#src').value === 'sample' ? '<p class="error">Sample data only — not the real Leafs schedule.</p>' : ''}`;
+        const r = await api('POST', '/api/schedule/preview', v.startsWith('bundled:')
+          ? { source: 'bundled', file: v.slice(8) } : { source: v, csv: $('#csv').value, season_start: $('#sYear').value });
+        games = kind === 'playoff' ? r.games.map(g => ({ ...g, type: 'playoff' })) : r.games;
+        renderGames();
         if (r.errors.length) $('#schedErr').innerHTML = r.errors.slice(0, 8).map(esc).join('<br>') + (r.errors.length > 8 ? `<br>…and ${r.errors.length - 8} more` : '');
       } catch (e) { $('#schedErr').textContent = e.message; }
     };
     $('#preview').onclick = loadSchedule;
-    loadSchedule();
+    if (files.length) loadSchedule(); else { $('#src').value = 'sample'; $('#src').onchange(); loadSchedule(); }
 
     $('#create').onclick = async () => {
       try {
         const { id } = await api('POST', '/api/drafts', {
-          name: $('#dName').value, season: $('#dSeason').value, order_type: $('#dType').value, user_ids: order, games,
+          name: $('#dName').value, season: $('#dSeason').value, kind, mode: $('#dMode').value, order_type: $('#dType').value,
+          warn_secs: Math.round(Number($('#dWarn').value || 0) * 60), user_ids: order, games,
         });
         toast('Draft created'); location.hash = `#/board/${id}`;
       } catch (e) { $('#createErr').textContent = e.message; }
     };
   }
 
+  // ------------------------------------------------------------ import past draft
+  async function viewImport() {
+    if (!state.me.is_admin) { location.hash = '#/'; return; }
+    const seq = routeSeq;
+    const users = await api('GET', '/api/users');
+    if (seq !== routeSeq) return;
+    $app.innerHTML = `
+      <div class="page">
+        <h1>Import a past draft</h1>
+        <div class="grid2">
+          <div class="panel">
+            <div class="field"><label>Draft type</label><select id="iKind"><option value="season">Season</option><option value="playoff">Playoffs (single seats)</option></select></div>
+            <div class="field"><label>Season</label><input type="text" id="iSeason" placeholder="2025-26"></div>
+            <div class="field"><label>Name</label><input type="text" id="iName" placeholder="2025-26 Season Draft"></div>
+            <div class="field"><label>Order</label><select id="iType"><option value="snake">Snake</option><option value="linear">Linear</option></select></div>
+            <div class="field"><label>CSV file</label><input type="file" id="iFile" accept=".csv,text/csv"></div>
+            <textarea id="iCsv" placeholder="Pick,Partner,Date,Team,Time,Price&#10;1,Mark,7-Oct-25,Montreal Canadiens,7:00 PM,$404&#10;2,Dave,11-Oct-25,Ottawa Senators,7:00 PM,$304"></textarea>
+            <p class="error" id="iErr"></p>
+            <button class="btn primary" id="iGo">Import</button>
+          </div>
+          <div class="panel">
+            <h2>Format</h2>
+            <p class="small">One row per pick, in the order they were made (or with a <code>Pick</code> number column).</p>
+            <ul class="small">
+              <li><b>Partner</b> — must match a username or display name: ${users.map(u => `<code>${esc(u.display_name)}</code>`).join(', ')}</li>
+              <li><b>Date</b> and <b>Team</b> (or Opponent) — required</li>
+              <li><b>Pick</b>, <b>Time</b>, <b>Price</b>, <b>Type</b>, <b>Seconds</b> (time taken, e.g. <code>1:42</code>) — optional</li>
+            </ul>
+            <p class="small muted">Round 1’s order is taken from the first pick by each partner. Every partner in the file needs an account first. Imported drafts can be deleted and re-imported.</p>
+          </div>
+        </div>
+      </div>`;
+    const $ = s => $app.querySelector(s);
+    $('#iSeason').oninput = () => { $('#iName').value = `${$('#iSeason').value} ${$('#iKind').value === 'playoff' ? 'Playoff' : 'Season'} Draft`; };
+    $('#iFile').onchange = async e => { const f = e.target.files[0]; if (f) $('#iCsv').value = await f.text(); };
+    $('#iGo').onclick = async () => {
+      $('#iErr').textContent = '';
+      try {
+        const r = await api('POST', '/api/drafts/import', { name: $('#iName').value, season: $('#iSeason').value, kind: $('#iKind').value, order_type: $('#iType').value, csv: $('#iCsv').value });
+        toast(`Imported ${r.picks} picks`); location.hash = `#/history/${r.id}`;
+      } catch (e) { $('#iErr').innerHTML = esc(e.message) + (e.details ? '<br>' + e.details.slice(0, 10).map(esc).join('<br>') : ''); }
+    };
+  }
+
   // ------------------------------------------------------------ the draft board
   async function viewBoard(id) {
+    const seq = routeSeq;
     let s = await api('GET', `/api/drafts/${id}`);
-    let clockBase = 0, clockT0 = 0;
+    if (seq !== routeSeq) return;
+    let clockBase = 0, clockT0 = 0, warnedFor = null;
     let selected = null;
     const f = loadFilters();
 
     function loadFilters() {
-      try { return { team: '', dows: [], hideTaken: false, q: '', ...JSON.parse(localStorage.getItem('boardFilters') || '{}') }; }
-      catch { return { team: '', dows: [], hideTaken: false, q: '' }; }
+      const d = { team: '', dows: [], type: '', hideTaken: false, mine: false, q: '' };
+      try { return { ...d, ...JSON.parse(localStorage.getItem('boardFilters') || '{}') }; } catch { return d; }
     }
     function saveFilters() { try { localStorage.setItem('boardFilters', JSON.stringify(f)); } catch { /* storage unavailable */ } }
-
-    const userMap = () => Object.fromEntries(s.order.map(o => [o.user_id, { id: o.user_id, display_name: o.display_name, color: o.color }]));
 
     $app.innerHTML = `
       <div class="board-page">
@@ -273,6 +443,7 @@
             <div class="clock-ctrls">
               <button class="icon-btn" id="pauseBtn" title="Pause / resume clock">❚❚</button>
               <button class="icon-btn" id="undoBtn" title="Undo last pick (commissioner)">↶</button>
+              <button class="icon-btn" id="nudgeBtn" title="Email a reminder to whoever is on the clock">✉</button>
             </div>
             <div><div class="clock" id="clock">00:00</div><div class="clock-sub" id="clockSub">time on the clock</div></div>
           </div>
@@ -284,11 +455,14 @@
         </div>
         <div class="toolbar">
           <select id="fTeam"><option value="">All opponents</option>${state.teams.map(t => `<option value="${t.abbr}">${esc(t.city)} ${esc(t.name)}</option>`).join('')}</select>
+          <select id="fType" hidden><option value="">All game types</option><option value="preseason">Preseason</option><option value="regular">Regular season</option><option value="playoff">Playoffs</option></select>
           <div class="dow-chips" id="fDow">${DOW.map((d, i) => `<button data-dow="${i}" title="${d}">${d}</button>`).join('')}</div>
           <label class="toggle"><input type="checkbox" id="fHide"> Available only</label>
+          <label class="toggle"><input type="checkbox" id="fMine"> My games</label>
           <input type="text" class="search" id="fQ" placeholder="🔍  Search team, date, note…">
           <button class="btn sm" id="fClear">Clear</button>
           <span class="spacer"></span>
+          <button class="btn sm" id="addGameBtn" hidden>+ Game</button>
           <button class="btn go" id="draftBtn" disabled>Draft game</button>
         </div>
         <div class="banner"><span id="banner"></span>
@@ -299,11 +473,13 @@
     const $ = sel => $app.querySelector(sel);
 
     // filters
-    $('#fTeam').value = f.team; $('#fHide').checked = f.hideTaken; $('#fQ').value = f.q;
+    $('#fTeam').value = f.team; $('#fType').value = f.type; $('#fHide').checked = f.hideTaken; $('#fMine').checked = f.mine; $('#fQ').value = f.q;
     const syncDow = () => $('#fDow').querySelectorAll('button').forEach(b => b.classList.toggle('on', f.dows.includes(+b.dataset.dow)));
     syncDow();
     $('#fTeam').onchange = () => { f.team = $('#fTeam').value; saveFilters(); renderBoard(); };
+    $('#fType').onchange = () => { f.type = $('#fType').value; saveFilters(); renderBoard(); };
     $('#fHide').onchange = () => { f.hideTaken = $('#fHide').checked; saveFilters(); renderBoard(); };
+    $('#fMine').onchange = () => { f.mine = $('#fMine').checked; saveFilters(); renderBoard(); };
     $('#fQ').oninput = () => { f.q = $('#fQ').value; saveFilters(); renderBoard(); };
     $('#fDow').onclick = e => {
       const b = e.target.closest('[data-dow]'); if (!b) return;
@@ -311,26 +487,32 @@
       f.dows = f.dows.includes(d) ? f.dows.filter(x => x !== d) : [...f.dows, d];
       saveFilters(); syncDow(); renderBoard();
     };
-    $('#fClear').onclick = () => { Object.assign(f, { team: '', dows: [], hideTaken: false, q: '' }); saveFilters(); $('#fTeam').value = ''; $('#fHide').checked = false; $('#fQ').value = ''; syncDow(); renderBoard(); };
+    $('#fClear').onclick = () => {
+      Object.assign(f, { team: '', dows: [], type: '', hideTaken: false, mine: false, q: '' }); saveFilters();
+      $('#fTeam').value = ''; $('#fType').value = ''; $('#fHide').checked = false; $('#fMine').checked = false; $('#fQ').value = ''; syncDow(); renderBoard();
+    };
 
     const myTurn = () => s.draft.status === 'live' && s.on_clock && (s.on_clock.user_id === state.me.id || state.me.is_admin);
 
     function renderHeader() {
       const d = s.draft;
       clockBase = d.elapsed_ms; clockT0 = performance.now();
-      const users = userMap();
+      const users = usersOf(s);
       $('#pauseBtn').disabled = d.status !== 'live';
       $('#pauseBtn').textContent = d.paused_at ? '▶' : '❚❚';
-      $('#undoBtn').disabled = !state.me.is_admin || !s.picks.length || d.status === 'setup';
+      $('#undoBtn').disabled = !state.me.is_admin || !s.picks.length || d.status === 'setup' || d.source === 'import';
+      $('#nudgeBtn').disabled = d.status !== 'live';
+      $('#addGameBtn').hidden = !(state.me.is_admin && d.status !== 'complete');
+      $('#fType').hidden = new Set(s.games.map(g => g.type)).size < 2;
       $('#rnd').textContent = s.on_clock ? s.on_clock.round : d.status === 'complete' ? '✓' : '–';
       $('#pk').textContent = s.on_clock ? s.on_clock.pick_in_round : '–';
-      const taken = s.picks.length, total = s.games.length;
-      $('#banner').innerHTML = `${esc(d.name)} <span class="muted">· ${taken}/${total} games drafted${d.status === 'setup' ? ' · draft not started' : ''}${d.status === 'complete' ? ' · draft complete' : ''}</span>`;
+      $('#banner').innerHTML = `${esc(d.name)} <span class="muted">· ${s.picks.length}/${d.total_picks} picks${pickSeats(s) ? ' (single seats)' : ''}${d.mode === 'async' ? ' · drafting by email' : ''}${d.status === 'setup' ? ' · not started' : ''}${d.status === 'complete' ? ' · complete' : ''}</span>`;
 
       let html = '';
+      const mine = s.on_clock?.user_id === state.me.id;
+      document.title = mine ? `🍁 YOUR PICK — ${BASE_TITLE}` : BASE_TITLE;
       if (s.on_clock) {
         const u = users[s.on_clock.user_id];
-        const mine = s.on_clock.user_id === state.me.id;
         html = `<div style="min-width:0;flex:1">
           <div class="who">${avatar(u, 'lg')}<div style="min-width:0">
             ${mine ? '<div class="yours">YOU’RE ON THE CLOCK</div>' : '<div class="yours" style="color:var(--muted)">ON THE CLOCK</div>'}
@@ -343,7 +525,7 @@
           ${state.me.is_admin ? '<button class="btn go" id="startBtn" style="margin-top:8px">Start draft</button>' : ''}</div>`;
       } else {
         html = `<div><div class="name" style="font-family:var(--cond);font-size:2.4rem;font-weight:800">DRAFT COMPLETE 🏒</div>
-          <a class="btn primary" href="#/history/${d.id}" style="margin-top:6px">View results</a></div>`;
+          <div class="row" style="margin-top:6px"><a class="btn primary" href="#/history/${d.id}">View results</a><a class="btn" href="#/trades">Trades</a></div></div>`;
       }
       $('#onclock').innerHTML = html;
       $('#startBtn')?.addEventListener('click', async () => {
@@ -358,67 +540,88 @@
       const ms = clockBase + (running ? performance.now() - clockT0 : 0);
       const el = $('#clock'); if (!el) return;
       el.textContent = d.status === 'live' ? fmtDur(ms / 1000) : '00:00';
+      const warn = d.status === 'live' && d.warn_secs > 0 && ms / 1000 >= d.warn_secs;
       el.classList.toggle('paused', !!d.paused_at);
-      const times = s.picks.map(p => p.seconds_taken);
-      $('#clockSub').textContent = d.paused_at ? 'clock paused' :
+      el.classList.toggle('warn', warn && !d.paused_at);
+      if (warn && s.on_clock && warnedFor !== s.on_clock.overall) {
+        warnedFor = s.on_clock.overall;
+        if (s.on_clock.user_id === state.me.id) { beep(); toast(`⏰ ${fmtDur(d.warn_secs)} on the clock — time to pick! (no limit)`); }
+      }
+      const times = s.picks.map(p => p.seconds_taken).filter(x => x != null);
+      $('#clockSub').textContent = d.paused_at ? 'clock paused' : warn ? `over ${fmtDur(d.warn_secs)} — no limit, just a nudge` :
         times.length ? `avg pick ${fmtDur(times.reduce((a, b) => a + b, 0) / times.length)}` : 'time on the clock';
     }
 
-    function gameMatches(g) {
+    function gameMatches(g, gp) {
       const d = parseDate(g.date);
       if (f.team && g.opponent !== f.team) return false;
+      if (f.type && g.type !== f.type) return false;
       if (f.dows.length && !f.dows.includes(d.getDay())) return false;
+      if (f.mine && !gp.some(p => p.owner_id === state.me.id)) return false;
+      if (f.hideTaken && gp.length >= (pickSeats(s) ? g.seats : 1)) return false;
       if (f.q) {
         const t = team(g.opponent);
-        const hay = `${t.abbr} ${t.city} ${t.name} ${fmtGameDate(g)} ${MONTHS_LONG[d.getMonth()]} ${g.notes}`.toLowerCase();
+        const hay = `${t.abbr} ${t.city} ${t.name} ${fmtGameDate(g)} ${MONTHS_LONG[d.getMonth()]} ${g.notes} ${TYPE_LABEL[g.type]}`.toLowerCase();
         if (!f.q.toLowerCase().split(/\s+/).every(w => hay.includes(w))) return false;
       }
       return true;
     }
 
+    function ownerLine(p, users) {
+      const u = users[p.owner_id], drafter = users[p.user_id];
+      const traded = p.owner_id !== p.user_id;
+      return `<div class="by" style="--who:${esc(u.color)}"><span class="dot"></span>${esc(u.display_name)}${traded ? ` <span class="slot" title="Drafted by ${esc(drafter.display_name)}">⇄</span>` : ''}${p.seat ? `<span class="slot">S${p.seat}</span>` : ''}<span class="slot">${p.round}.${p.pick_in_round}</span></div>`;
+    }
+
     function renderBoard() {
-      const pickByGame = Object.fromEntries(s.picks.map(p => [p.game_id, p]));
-      const users = userMap();
+      const picksByGame = {};
+      s.picks.forEach(p => (picksByGame[p.game_id] ||= []).push(p));
+      const users = usersOf(s);
+      const single = pickSeats(s);
       const months = new Map();
       s.games.forEach(g => {
         const d = parseDate(g.date); const k = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}`;
         if (!months.has(k)) months.set(k, { label: MONTHS_LONG[d.getMonth()], year: d.getFullYear(), games: [] });
         months.get(k).games.push(g);
       });
-      if (selected && pickByGame[selected]) selected = null;
+      const full = g => (picksByGame[g.id] || []).length >= (single ? g.seats : 1);
+      if (selected && full(s.games.find(g => g.id === selected))) selected = null;
       $('#board').innerHTML = [...months.values()].map(m => {
-        const cards = m.games.filter(g => gameMatches(g) && !(f.hideTaken && pickByGame[g.id])).map(g => {
-          const t = team(g.opponent); const p = pickByGame[g.id];
-          if (p) {
-            const u = users[p.user_id];
-            return `<div class="card taken ${p.user_id === state.me.id ? 'mine' : ''}" style="--who:${esc(u.color)}" title="Taken by ${esc(u.display_name)} in ${fmtDur(p.seconds_taken)}">
-              <div class="top"><span>${fmtGameDate(g)}</span><span>${t.abbr}</span></div>
+        const cards = m.games.filter(g => gameMatches(g, picksByGame[g.id] || [])).map(g => {
+          const t = team(g.opponent); const gp = picksByGame[g.id] || [];
+          const badge = g.type === 'preseason' ? '<span class="tbadge">PRE</span>' : g.type === 'playoff' ? '<span class="tbadge">PO</span>' : '';
+          if (full(g)) {
+            const mine = gp.some(p => p.owner_id === state.me.id);
+            return `<div class="card taken ${mine ? 'mine' : ''}" style="--who:${esc(users[gp[0].owner_id].color)}">
+              <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${t.abbr}</span></div>
               <div class="opp">${esc(t.name)}</div>
-              <div class="by"><span class="dot"></span>${esc(u.display_name)}<span class="slot">${p.round}.${p.pick_in_round}</span></div>
+              ${gp.map(p => ownerLine(p, users)).join('')}
             </div>`;
           }
+          const left = single ? g.seats - gp.length : 0;
           return `<button class="card ${t.div} ${selected === g.id ? 'selected' : ''}" data-game="${g.id}">
-            <div class="top"><span>${fmtGameDate(g)}</span><span>${fmtTime(g.time)}</span></div>
-            <div class="city">${esc(t.city)}</div>
+            <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${fmtTime(g.time)}</span></div>
+            <div class="city"><span>${esc(t.city)}</span><span>${fmtMoney(g.price)}</span></div>
             <div class="opp">${esc(t.name)}</div>
             ${g.notes ? `<div class="note">★ ${esc(g.notes)}</div>` : ''}
+            ${single && gp.length ? `<div class="seats">${left} seat${left === 1 ? '' : 's'} left</div>${gp.map(p => ownerLine(p, users)).join('')}` : ''}
           </button>`;
         }).join('');
         return `<section class="month"><div class="month-head">${m.label} <span>${m.year}</span></div>${cards || '<div class="empty-month">No games match</div>'}</section>`;
-      }).join('') || '<p class="muted" style="padding:16px">No games in this draft.</p>';
+      }).join('') || '<p class="muted" style="padding:16px">No games in this draft yet.</p>';
       $('#draftBtn').disabled = !(selected && myTurn());
-      $('#draftBtn').textContent = myTurn() && s.on_clock.user_id !== state.me.id ? `Draft for ${users[s.on_clock.user_id].display_name}` : 'Draft game';
+      $('#draftBtn').textContent = myTurn() && s.on_clock.user_id !== state.me.id ? `Draft for ${users[s.on_clock.user_id].display_name}` : single ? 'Draft seat' : 'Draft game';
     }
 
     function renderTicker() {
-      const users = userMap();
+      const users = usersOf(s);
       const gameMap = Object.fromEntries(s.games.map(g => [g.id, g]));
       const recent = s.picks.slice(-15).reverse();
       const el = $('#ticker');
       if (!recent.length) { el.className = 'scroll still'; el.innerHTML = '<span>No picks yet — good luck, partners.</span>'; return; }
       el.className = 'scroll';
       el.innerHTML = recent.map(p => { const g = gameMap[p.game_id]; const t = team(g.opponent);
-        return `<span><b>${p.round}.${p.pick_in_round}</b>${esc(users[p.user_id].display_name)} / ${fmtGameDate(g)} vs ${esc(t.name)}<span class="t">(${fmtDur(p.seconds_taken)})</span></span>`; }).join('');
+        return `<span><b>${p.round}.${p.pick_in_round}</b>${esc(users[p.user_id].display_name)} / ${fmtGameDate(g)} vs ${esc(t.name)}${seatLabel(p)}<span class="t">(${fmtDur(p.seconds_taken)})</span></span>`; }).join('');
     }
 
     function renderAll() { renderHeader(); renderBoard(); renderTicker(); }
@@ -437,12 +640,14 @@
     function confirmPick() {
       if (!selected || !myTurn()) return;
       const g = s.games.find(x => x.id === selected); const t = team(g.opponent);
-      const forUser = userMap()[s.on_clock.user_id];
+      const forUser = usersOf(s)[s.on_clock.user_id];
       const behalf = s.on_clock.user_id !== state.me.id;
+      const taken = s.picks.filter(p => p.game_id === g.id);
       modal(`
         <div class="muted small">ROUND ${s.on_clock.round} · PICK ${s.on_clock.pick_in_round} · ${behalf ? `ON BEHALF OF ${esc(forUser.display_name.toUpperCase())}` : 'YOUR PICK'}</div>
         <div class="big">${esc(t.city)} ${esc(t.name)}</div>
-        <p>${DOW[parseDate(g.date).getDay()] === 'Sat' ? '🏒 Saturday night · ' : ''}${fmtGameDate(g)} · ${fmtTime(g.time)}${g.notes ? ` · ${esc(g.notes)}` : ''}</p>
+        <p>${fmtGameDate(g)} · ${fmtTime(g.time)}${g.price ? ` · ${fmtMoney(g.price)}/seat` : ''}${g.notes ? ` · ${esc(g.notes)}` : ''}</p>
+        ${pickSeats(s) ? `<p class="muted">One seat (seat ${taken.length + 1} of ${g.seats})${taken.length ? ` — the other is held by ${esc(usersOf(s)[taken[0].owner_id].display_name)}` : ''}.</p>` : ''}
         <div class="row"><button class="btn go" id="confirmPick">Lock it in</button><button class="btn" data-close>Cancel</button></div>`,
         ($m, close) => {
           $m.querySelector('#confirmPick').onclick = async () => {
@@ -457,33 +662,54 @@
       if (!confirm('Undo the last pick? That partner goes back on the clock.')) return;
       try { s = await api('POST', `/api/drafts/${id}/undo`); renderAll(); } catch (e) { toast(e.message, true); }
     };
+    $('#nudgeBtn').onclick = async () => {
+      try { const r = await api('POST', `/api/drafts/${id}/nudge`); toast(r.mail_enabled ? 'Reminder email sent' : 'Email isn’t configured on the server yet — reminder logged only'); }
+      catch (e) { toast(e.message, true); }
+    };
+    $('#addGameBtn').onclick = () => modal(`
+      <h2>Add a game</h2>
+      <div class="field"><label>Date</label><input type="date" id="mDate"></div>
+      <div class="row"><div class="field" style="flex:1"><label>Time</label><input type="time" id="mTime" value="19:00"></div>
+        <div class="field" style="flex:1"><label>Price / seat</label><input type="number" id="mPrice" min="0"></div></div>
+      <div class="field"><label>Opponent</label><select id="mOpp">${teamOptions()}</select></div>
+      <div class="field"><label>Type</label><select id="mType"><option value="regular">Regular season</option><option value="preseason">Preseason</option><option value="playoff" ${s.draft.kind === 'playoff' ? 'selected' : ''}>Playoff</option></select></div>
+      <div class="field"><label>Notes</label><input type="text" id="mNotes" placeholder="e.g. Rd 1 Gm 2"></div>
+      <div class="row"><button class="btn primary" id="mAdd">Add game</button><button class="btn" data-close>Cancel</button></div>`,
+      ($m, close) => {
+        $m.querySelector('#mAdd').onclick = async () => {
+          const v = k => $m.querySelector(k).value;
+          try { s = await api('POST', `/api/drafts/${id}/games`, { date: v('#mDate'), time: v('#mTime'), price: v('#mPrice'), opponent: v('#mOpp'), type: v('#mType'), notes: v('#mNotes') }); close(); renderAll(); }
+          catch (e) { toast(e.message, true); }
+        };
+      });
 
     // live updates
     async function refresh() {
       const prevCount = s.picks.length;
       try { s = await api('GET', `/api/drafts/${id}`); } catch { return; }
       renderAll();
-      if (s.picks.length > prevCount && s.on_clock?.user_id === state.me.id) toast('🍁 You’re on the clock!');
+      if (s.picks.length > prevCount && s.on_clock?.user_id === state.me.id) { toast('🍁 You’re on the clock!'); beep(); }
     }
-    const es = new EventSource(`/api/drafts/${id}/events`);
-    es.addEventListener('update', refresh);
+    const stop = live(id, refresh);
     const timer = setInterval(tickClock, 250);
     const onKey = e => { if (e.key === 'Escape' && selected) { selected = null; renderBoard(); } };
     document.addEventListener('keydown', onKey);
-    cleanup = () => { es.close(); clearInterval(timer); document.removeEventListener('keydown', onKey); };
+    own(seq, () => { stop(); clearInterval(timer); document.removeEventListener('keydown', onKey); });
   }
 
   // ------------------------------------------------------------ history
   async function viewHistoryIndex() {
+    const seq = routeSeq;
     const drafts = (await api('GET', '/api/drafts')).filter(d => d.status === 'complete' || d.pick_count > 0);
+    if (seq !== routeSeq) return;
     $app.innerHTML = `
       <div class="page">
         <h1>Draft history</h1>
         <div class="panel">
           ${drafts.length ? drafts.map(d => `
             <div class="draft-item">
-              <div><div class="title">${esc(d.name)} <span class="pill ${d.status}">${d.status}</span></div>
-              <div class="muted small">${esc(d.season)} · ${d.pick_count}/${d.game_count} picks${d.completed_at ? ` · finished ${fmtWhen(d.completed_at)}` : ''}</div></div>
+              <div><div class="title">${esc(d.name)} <span class="pill ${d.status}">${d.status}</span>${d.source === 'import' ? ' <span class="pill setup">imported</span>' : ''}</div>
+              <div class="muted small">${esc(d.season)} · ${d.kind === 'playoff' ? 'playoffs' : 'season'} · ${d.pick_count}/${d.total_picks} picks${d.completed_at ? ` · finished ${fmtWhen(d.completed_at)}` : ''}</div></div>
               <a class="btn primary" href="#/history/${d.id}">View results</a>
             </div>`).join('') : '<p class="muted">No drafts with picks yet.</p>'}
         </div>
@@ -491,31 +717,38 @@
   }
 
   async function viewHistory(id) {
-    const s = await api('GET', `/api/drafts/${id}`);
+        const seq = routeSeq;
+const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET', `/api/trades?draft_id=${id}`)]);
+    if (seq !== routeSeq) return;
     const d = s.draft;
-    const users = Object.fromEntries(s.order.map(o => [o.user_id, { id: o.user_id, display_name: o.display_name, color: o.color }]));
+    const users = usersOf(s);
     const gameMap = Object.fromEntries(s.games.map(g => [g.id, g]));
     const rounds = Math.max(0, ...s.picks.map(p => p.round));
     const pickAt = (r, uid) => s.picks.find(p => p.round === r && p.user_id === uid);
+    const imported = d.source === 'import';
+    const anyPrice = s.games.some(g => g.price);
+    const accepted = trades.filter(t => t.status === 'accepted');
     const cell = p => {
       if (!p) return '<span class="muted">—</span>';
       const g = gameMap[p.game_id]; const t = team(g.opponent);
-      return `<div class="rg-cell card ${t.div}" style="cursor:default"><div class="d">${fmtGameDate(g)}</div><div class="o">${esc(t.name)}</div><div class="s">#${p.overall} · ${fmtDur(p.seconds_taken)}</div></div>`;
+      return `<div class="rg-cell card ${t.div}" style="cursor:default"><div class="d">${fmtGameDate(g)}${seatLabel(p)}</div><div class="o">${esc(t.name)}</div><div class="s">#${p.overall}${imported ? '' : ` · ${fmtDur(p.seconds_taken)}`}${g.price ? ` · ${fmtMoney(pickValue(p, g))}` : ''}</div></div>`;
     };
     const stats = uid => {
-      const ps = s.picks.filter(p => p.user_id === uid);
-      const secs = ps.map(p => p.seconds_taken);
-      const weekend = ps.filter(p => [0, 5, 6].includes(parseDate(gameMap[p.game_id].date).getDay())).length;
+      const drafted = s.picks.filter(p => p.user_id === uid);
+      const held = s.picks.filter(p => p.owner_id === uid);
+      const secs = drafted.map(p => p.seconds_taken).filter(x => x != null);
+      const weekend = held.filter(p => [0, 5, 6].includes(parseDate(gameMap[p.game_id].date).getDay())).length;
       const total = secs.reduce((a, b) => a + b, 0);
-      return { ps, count: ps.length, weekend, total, avg: secs.length ? total / secs.length : 0, max: secs.length ? Math.max(...secs) : 0 };
+      const value = held.reduce((a, p) => a + pickValue(p, gameMap[p.game_id]), 0);
+      return { held, count: held.length, weekend, value, avg: secs.length ? total / secs.length : null, max: secs.length ? Math.max(...secs) : null };
     };
     const duration = d.completed_at && d.started_at ? (d.completed_at - d.started_at) / 1000 : null;
 
     $app.innerHTML = `
       <div class="page" style="max-width:1300px">
         <div class="row spread"><h1 style="margin:0">${esc(d.name)}</h1><a class="btn" href="#/board/${d.id}">Open board</a></div>
-        <p class="muted">${esc(d.season)} · <span class="pill ${d.status}">${d.status}</span> · ${d.order_type} order ·
-          ${d.started_at ? `started ${fmtWhen(d.started_at)}` : 'not started'}${duration ? ` · took ${fmtDur(duration)}` : ''}</p>
+        <p class="muted">${esc(d.season)} · <span class="pill ${d.status}">${d.status}</span> · ${d.kind === 'playoff' ? 'playoffs, single seats' : 'season, pairs'} · ${d.order_type} order ·
+          ${imported ? 'imported from spreadsheet' : d.started_at ? `started ${fmtWhen(d.started_at)}` : 'not started'}${duration ? ` · took ${fmtDur(duration)}` : ''}</p>
 
         <div class="panel">
           <h2>Draft order</h2>
@@ -527,15 +760,17 @@
             <div class="panel partner-col">
               <h3>${avatar(users[o.user_id])} ${esc(o.display_name)}</h3>
               <div class="stat-row">
-                <div class="stat"><div class="v">${st.count}</div><div class="k">Games</div></div>
+                <div class="stat"><div class="v">${st.count}</div><div class="k">${pickSeats(s) ? 'Seats' : 'Games'}</div></div>
                 <div class="stat"><div class="v">${st.weekend}</div><div class="k">Fri–Sun</div></div>
-                <div class="stat"><div class="v">${fmtDur(st.avg)}</div><div class="k">Avg pick</div></div>
-                <div class="stat"><div class="v">${fmtDur(st.max)}</div><div class="k">Longest</div></div>
+                ${anyPrice ? `<div class="stat"><div class="v">${fmtMoney(st.value)}</div><div class="k">Value</div></div>` : ''}
+                ${imported ? '' : `<div class="stat"><div class="v">${fmtDur(st.avg)}</div><div class="k">Avg pick</div></div>
+                <div class="stat"><div class="v">${fmtDur(st.max)}</div><div class="k">Longest</div></div>`}
               </div>
-              <ul class="mini-list">${st.ps.slice().sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date)).map(p => { const g = gameMap[p.game_id];
-                return `<li><span>${fmtGameDate(g)} · ${esc(team(g.opponent).name)}</span><span>R${p.round} · ${fmtDur(p.seconds_taken)}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
+              <ul class="mini-list">${st.held.slice().sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date)).map(p => { const g = gameMap[p.game_id];
+                return `<li><span>${fmtGameDate(g)} · ${esc(team(g.opponent).name)}${seatLabel(p)}${p.owner_id !== p.user_id ? ` <span class="muted" title="Drafted by ${esc(users[p.user_id].display_name)}">⇄ via trade</span>` : ''}</span><span>R${p.round}${imported ? '' : ` · ${fmtDur(p.seconds_taken)}`}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
             </div>`; }).join('')}
         </div>
+        ${accepted.length ? `<p class="muted small">Holdings above include ${accepted.length} completed trade${accepted.length > 1 ? 's' : ''}; the round grid and log show the original draft.</p>` : ''}
 
         <div class="panel">
           <h2>Results by round</h2>
@@ -549,19 +784,125 @@
         <div class="panel">
           <h2>Pick log</h2>
           <div class="table-wrap"><table>
-            <thead><tr><th>#</th><th>Rd.Pick</th><th>Partner</th><th>Game</th><th>Time taken</th><th>Picked at</th></tr></thead>
+            <thead><tr><th>#</th><th>Rd.Pick</th><th>Partner</th><th>Game</th>${anyPrice ? '<th>Price</th>' : ''}${imported ? '' : '<th>Time taken</th><th>Picked at</th>'}</tr></thead>
             <tbody>${s.picks.map(p => { const g = gameMap[p.game_id]; const t = team(g.opponent);
               return `<tr><td>${p.overall}</td><td>${p.round}.${p.pick_in_round}</td><td>${esc(users[p.user_id].display_name)}${p.made_by && p.made_by !== p.user_id ? ' <span class="muted small">(entered by commissioner)</span>' : ''}</td>
-                <td>${fmtGameDate(g)} · ${fmtTime(g.time)} · ${esc(t.city)} ${esc(t.name)}</td><td>${fmtDur(p.seconds_taken)}</td><td class="muted">${fmtWhen(p.picked_at)}</td></tr>`; }).join('')}</tbody>
+                <td>${fmtGameDate(g)} · ${fmtTime(g.time)} · ${esc(t.city)} ${esc(t.name)}${seatLabel(p)}${g.type !== 'regular' ? ` <span class="tbadge">${g.type === 'preseason' ? 'PRE' : 'PO'}</span>` : ''}</td>
+                ${anyPrice ? `<td>${fmtMoney(pickValue(p, g))}</td>` : ''}${imported ? '' : `<td>${fmtDur(p.seconds_taken)}</td><td class="muted">${fmtWhen(p.picked_at)}</td>`}</tr>`; }).join('')}</tbody>
           </table></div>
         </div>
       </div>`;
   }
 
+  // ------------------------------------------------------------ trades
+  async function viewTrades() {
+        const seq = routeSeq;
+const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), api('GET', '/api/trades'), api('GET', '/api/users')]);
+    if (seq !== routeSeq) return;
+    const userMap = Object.fromEntries(users.map(u => [u.id, u]));
+    const tradable = drafts.filter(d => d.status === 'complete');
+    const draftName = Object.fromEntries(drafts.map(d => [d.id, d.name]));
+    const today = torontoToday();
+    const me = state.me.id;
+    let draftId = Number(sessionStorage.getItem('tradeDraft')) || tradable[0]?.id;
+    if (!tradable.some(d => d.id === draftId)) draftId = tradable[0]?.id;
+
+    const itemList = items => items.map(i => `<li>${esc(gameName(i))}${i.seat ? ` · seat ${i.seat}` : ''}${i.price ? ` <span class="muted">${fmtMoney(i.price * (i.seat ? 1 : 2))}</span>` : ''}</li>`).join('') || '<li class="muted">nothing</li>';
+    const tradeCard = t => {
+      const from = userMap[t.from_user], to = userMap[t.to_user];
+      const incoming = t.to_user === me && t.status === 'pending';
+      const outgoing = t.from_user === me && t.status === 'pending';
+      return `<div class="trade">
+        <div class="row spread"><div class="row" style="gap:8px">${avatar(from)} <b>${esc(from.display_name)}</b> <span class="muted">→</span> ${avatar(to)} <b>${esc(to.display_name)}</b></div>
+          <span class="pill ${t.status === 'accepted' ? 'complete' : t.status === 'pending' ? 'live' : 'setup'}">${t.status}</span></div>
+        <div class="muted small">${esc(draftName[t.draft_id])} · proposed ${fmtWhen(t.created_at)}${t.resolved_at ? ` · ${t.status} ${fmtWhen(t.resolved_at)}` : ''}</div>
+        <div class="trade-sides">
+          <div><div class="k">${esc(from.display_name)} gives</div><ul>${itemList(t.give)}</ul></div>
+          <div><div class="k">${esc(to.display_name)} gives</div><ul>${itemList(t.get)}</ul></div>
+        </div>
+        ${t.message ? `<p class="small">“${esc(t.message)}”</p>` : ''}
+        ${incoming ? `<div class="row"><button class="btn go sm" data-act="accept" data-id="${t.id}">Accept</button><button class="btn sm" data-act="decline" data-id="${t.id}">Decline</button></div>` : ''}
+        ${outgoing ? `<button class="btn danger sm" data-act="cancel" data-id="${t.id}">Withdraw</button>` : ''}
+      </div>`;
+    };
+    const pending = trades.filter(t => t.status === 'pending');
+    const past = trades.filter(t => t.status !== 'pending');
+
+    $app.innerHTML = `
+      <div class="page">
+        <h1>Trades</h1>
+        <div class="panel">
+          <h2>Propose a trade</h2>
+          ${tradable.length ? `
+          <div class="row" style="align-items:flex-end">
+            <div class="field" style="flex:1;min-width:200px"><label>Draft</label><select id="tDraft">${tradable.map(d => `<option value="${d.id}" ${d.id === draftId ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></div>
+            <div class="field" style="flex:1;min-width:160px"><label>Trade with</label><select id="tWith"></select></div>
+          </div>
+          <div class="grid2" id="tSides"></div>
+          <div class="field"><label>Message (optional)</label><input type="text" id="tMsg" maxlength="500" placeholder="e.g. Swap my Tuesday for your Saturday?"></div>
+          <div class="row"><button class="btn primary" id="tSend">Send request</button><span class="muted small" id="tSummary"></span></div>`
+          : '<p class="muted">Trades open once a draft is complete.</p>'}
+        </div>
+        <div class="panel"><h2>Open requests</h2>${pending.map(tradeCard).join('') || '<p class="muted">None.</p>'}</div>
+        <div class="panel"><h2>Trade history</h2>${past.map(tradeCard).join('') || '<p class="muted">No trades yet.</p>'}</div>
+      </div>`;
+    const $ = sel => $app.querySelector(sel);
+
+    $app.querySelectorAll('[data-act]').forEach(b => (b.onclick = async () => {
+      const act = b.dataset.act;
+      if (act === 'accept' && !confirm('Accept this trade? The games change hands immediately.')) return;
+      try { await api('POST', `/api/trades/${b.dataset.id}/${act}`); toast(`Trade ${act === 'cancel' ? 'withdrawn' : act + 'ed'}`); route(); }
+      catch (e) { toast(e.message, true); }
+    }));
+
+    if (tradable.length) {
+      let s;
+      const loadDraft = async () => {
+        sessionStorage.setItem('tradeDraft', draftId);
+        s = await api('GET', `/api/drafts/${draftId}`);
+        const partners = s.order.filter(o => o.user_id !== me);
+        $('#tWith').innerHTML = partners.map(o => `<option value="${o.user_id}">${esc(o.display_name)}</option>`).join('');
+        renderSides();
+      };
+      const renderSides = () => {
+        const other = Number($('#tWith').value);
+        const gameMap = Object.fromEntries(s.games.map(g => [g.id, g]));
+        const list = (owner, name) => {
+          const ps = s.picks.filter(p => p.owner_id === owner && gameMap[p.game_id].date >= today)
+            .sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date));
+          return `<div><h3>${name}</h3><div class="check-list trade-pick">${ps.map(p => { const g = gameMap[p.game_id];
+            return `<label><input type="checkbox" name="${owner === me ? 'give' : 'get'}" value="${p.id}"> ${esc(gameName(g))}${seatLabel(p)} <span class="muted">${fmtMoney(pickValue(p, g))}</span></label>`; }).join('') || '<p class="muted">No upcoming games.</p>'}</div></div>`;
+        };
+        $('#tSides').innerHTML = list(me, 'You give') + list(other, `${esc(userMap[other]?.display_name)} gives`);
+        $('#tSides').onchange = summarize; summarize();
+      };
+      const summarize = () => {
+        const gameMap = Object.fromEntries(s.games.map(g => [g.id, g]));
+        const pickMap = Object.fromEntries(s.picks.map(p => [p.id, p]));
+        const sum = name => [...$app.querySelectorAll(`input[name=${name}]:checked`)].reduce((a, c) => { const p = pickMap[c.value]; return a + pickValue(p, gameMap[p.game_id]); }, 0);
+        const give = sum('give'), get = sum('get');
+        $('#tSummary').textContent = give || get ? `Value: you give ${fmtMoney(give)}, you get ${fmtMoney(get)}` : '';
+      };
+      $('#tDraft').onchange = () => { draftId = Number($('#tDraft').value); loadDraft(); };
+      $('#tWith').onchange = renderSides;
+      $('#tSend').onclick = async () => {
+        const ids = name => [...$app.querySelectorAll(`input[name=${name}]:checked`)].map(c => Number(c.value));
+        try {
+          await api('POST', '/api/trades', { draft_id: draftId, to_user: Number($('#tWith').value), give: ids('give'), get: ids('get'), message: $('#tMsg').value });
+          toast('Trade request sent'); route();
+        } catch (e) { toast(e.message, true); }
+      };
+      await loadDraft();
+    }
+    own(seq, live('trades', () => { if (location.hash !== '#/trades' || $app.querySelector('input:checked') || document.activeElement?.id === 'tMsg') { updateTradeBadge(); return; } route(); }));
+  }
+
   // ------------------------------------------------------------ profile
   async function viewProfile() {
     const me = state.me;
+    const seq = routeSeq;
     const drafts = await api('GET', '/api/drafts');
+    if (seq !== routeSeq) return;
     $app.innerHTML = `
       <div class="page">
         <h1>Profile</h1>
@@ -570,7 +911,9 @@
             <div class="row" style="margin-bottom:14px">${avatar(me, 'lg')}<div><div style="font-family:var(--cond);font-size:1.6rem;font-weight:800">${esc(me.display_name)}</div>
               <div class="muted small">@${esc(me.username)}${me.is_admin ? ' · Commissioner' : ''} · joined ${esc(me.created_at.slice(0, 10))}</div></div></div>
             <div class="field"><label>Display name</label><input type="text" name="display_name" value="${esc(me.display_name)}" maxlength="40"></div>
-            <div class="field"><label>Email (optional)</label><input type="email" name="email" value="${esc(me.email || '')}"></div>
+            <div class="field"><label>Email</label><input type="email" name="email" value="${esc(me.email || '')}"></div>
+            <label class="toggle" style="display:flex;gap:8px;color:var(--text);margin-bottom:14px"><input type="checkbox" name="notify_email" ${me.notify_email ? 'checked' : ''}> Email me when I’m on the clock (email drafts) and about trades</label>
+            ${state.mailEnabled ? '' : '<p class="muted small">Note: outgoing email isn’t configured on the server yet.</p>'}
             <div class="field"><label>Favourite Leaf (optional)</label><input type="text" name="favorite_player" value="${esc(me.favorite_player || '')}"></div>
             <div class="field"><label>Board colour</label><input type="color" name="color" value="${esc(me.color)}" style="width:70px;height:38px;border:0;background:none"></div>
             <p class="error" id="pErr"></p>
@@ -589,7 +932,9 @@
     const $ = sel => $app.querySelector(sel);
     $('#pForm').onsubmit = async e => {
       e.preventDefault();
-      try { const { user } = await api('PUT', '/api/me', Object.fromEntries(new FormData(e.target))); state.me = user; toast('Profile saved'); viewProfile(); }
+      const body = Object.fromEntries(new FormData(e.target));
+      body.notify_email = !!body.notify_email;
+      try { const { user } = await api('PUT', '/api/me', body); state.me = user; toast('Profile saved'); route(); }
       catch (err) { $('#pErr').textContent = err.message; }
     };
     $('#pwForm').onsubmit = async e => {
@@ -597,17 +942,20 @@
       try { await api('PUT', '/api/me/password', Object.fromEntries(new FormData(e.target))); e.target.reset(); toast('Password updated'); }
       catch (err) { $('#pwErr').textContent = err.message; }
     };
-    // per-draft summary of my picks
     const rows = [];
     for (const d of drafts.filter(x => x.pick_count > 0)) {
       const s = await api('GET', `/api/drafts/${d.id}`);
+      if (seq !== routeSeq) return;
       const mine = s.picks.filter(p => p.user_id === me.id);
       if (!mine.length) continue;
-      const avg = mine.reduce((a, p) => a + p.seconds_taken, 0) / mine.length;
-      rows.push(`<tr><td><a href="#/history/${d.id}">${esc(d.name)}</a></td><td>${mine.length}</td><td>${fmtDur(avg)}</td><td>${s.order.find(o => o.user_id === me.id)?.position ?? '—'}</td></tr>`);
+      const times = mine.map(p => p.seconds_taken).filter(x => x != null);
+      const gameMap = Object.fromEntries(s.games.map(g => [g.id, g]));
+      const value = s.picks.filter(p => p.owner_id === me.id).reduce((a, p) => a + pickValue(p, gameMap[p.game_id]), 0);
+      rows.push(`<tr><td><a href="#/history/${d.id}">${esc(d.name)}</a></td><td>${s.picks.filter(p => p.owner_id === me.id).length}</td><td>${value ? fmtMoney(value) : '—'}</td>
+        <td>${times.length ? fmtDur(times.reduce((a, b) => a + b, 0) / times.length) : '—'}</td><td>${s.order.find(o => o.user_id === me.id)?.position ?? '—'}</td></tr>`);
     }
     $('#myDrafts').innerHTML = rows.length
-      ? `<div class="table-wrap"><table><thead><tr><th>Draft</th><th>Games</th><th>Avg pick time</th><th>Draft slot</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
+      ? `<div class="table-wrap"><table><thead><tr><th>Draft</th><th>Games held</th><th>Value</th><th>Avg pick time</th><th>Draft slot</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
       : 'No picks yet.';
   }
 
@@ -615,8 +963,8 @@
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/logout'); state.me = null; location.hash = '#/login'; };
   window.addEventListener('hashchange', route);
   (async () => {
-    const [{ user }, teams] = await Promise.all([api('GET', '/api/me'), fetch('/api/teams').then(r => r.json())]);
-    state.me = user; state.teams = teams; state.teamMap = Object.fromEntries(teams.map(t => [t.abbr, t]));
+    const [{ user, mail_enabled }, teams] = await Promise.all([api('GET', '/api/me'), fetch('/api/teams').then(r => r.json())]);
+    state.me = user; state.mailEnabled = mail_enabled; state.teams = teams; state.teamMap = Object.fromEntries(teams.map(t => [t.abbr, t]));
     route();
   })();
 })();

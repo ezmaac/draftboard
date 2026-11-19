@@ -1,0 +1,25 @@
+# Fly.io config — `fly launch --copy-config` then `fly deploy`. See README "Hosting".
+app = "leafs-ticket-draft"   # must be globally unique; change it
+primary_region = "yyz"        # Toronto
+
+[build]
+
+[env]
+  PORT = "8080"
+  DB_FILE = "/data/draftboard.db"
+
+[[mounts]]
+  source = "draftboard_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  path = "/healthz"
+  interval = "30s"
+  timeout = "5s"
