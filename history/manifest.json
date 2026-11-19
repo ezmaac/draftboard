@@ -69,7 +69,9 @@
   },
   "freebie": null,
   "pick_order_recorded": false,
-  "report": [],
+  "report": [
+   "sheet's Ticket Value formula skips the last row, so it leaves out Pope's 2025-04-17 game ($230); totals here include it"
+  ],
   "file": "2024-25.csv",
   "picks": 42,
   "unassigned": 0
@@ -94,7 +96,9 @@
   },
   "freebie": null,
   "pick_order_recorded": false,
-  "report": [],
+  "report": [
+   "sheet's Ticket Value formula skips the last row, so it leaves out Pope's 2024-04-13 game ($236); totals here include it"
+  ],
   "file": "2023-24.csv",
   "picks": 42,
   "unassigned": 0
@@ -272,7 +276,9 @@
   },
   "freebie": null,
   "pick_order_recorded": false,
-  "report": [],
+  "report": [
+   "prices in this sheet were per seat; doubled to the pair price to match its Ticket Value"
+  ],
   "file": "2014-15.csv",
   "picks": 43,
   "unassigned": 0
@@ -297,7 +303,9 @@
   },
   "freebie": null,
   "pick_order_recorded": false,
-  "report": [],
+  "report": [
+   "prices in this sheet were per seat; doubled to the pair price to match its Ticket Value"
+  ],
   "file": "2013-14.csv",
   "picks": 45,
   "unassigned": 0
@@ -318,9 +326,7 @@
   "ticket_value": {},
   "freebie": null,
   "pick_order_recorded": false,
-  "report": [
-   "Abela: sheet says 9 picks, found 8"
-  ],
+  "report": [],
   "file": "2012-13.csv",
   "picks": 24,
   "unassigned": 0
@@ -394,18 +400,16 @@
   "sheet": "2008-2009 ",
   "season": "2008-09",
   "order": [
-   "Abela",
    "Pope",
-   "Q"
+   "Q",
+   "Abela"
   ],
   "counts": {
    "Abela": 15,
    "Q": 15,
    "Pope": 15
   },
-  "ticket_value": {
-   "Pope": 15
-  },
+  "ticket_value": {},
   "freebie": "Rob Pope",
   "pick_order_recorded": false,
   "report": [],
@@ -417,18 +421,16 @@
   "sheet": "2007-2008",
   "season": "2007-08",
   "order": [
+   "Q",
    "Abela",
-   "Pope",
-   "Q"
+   "Pope"
   ],
   "counts": {
    "Q": 15,
    "Pope": 15,
    "Abela": 15
   },
-  "ticket_value": {
-   "Pope": 15
-  },
+  "ticket_value": {},
   "freebie": null,
   "pick_order_recorded": false,
   "report": [],
@@ -495,7 +497,6 @@
   "freebie": "Q (travel document wallet)",
   "pick_order_recorded": false,
   "report": [
-   "row 25: unknown team \"Feb\" on 2004-02-12 \u2014 imported as TBD",
    "corrected 25 date year(s), e.g. 2003-01-08 -> 2004-01-08"
   ],
   "file": "2003-04.csv",

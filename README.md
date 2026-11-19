@@ -3,12 +3,12 @@
 A draft room for splitting Toronto Maple Leafs season-ticket games between partners. Everyone drafts from their own device, wherever they are.
 
 ## Features
-- **Draft board**: home games in columns by month/year, colour-coded by the opponent's division, with price per seat. Preseason games carry a `PRE` tag and playoff games a `PO` tag.
+- **Draft board**: home games in columns by month/year, colour-coded by the opponent's division, with the ticket price for the pair of seats (as in the Ticket Tracker). Preseason games carry a `PRE` tag and playoff games a `PO` tag.
 - **Filters**: opponent, day of week (multi-select), game type, "available only", "my games", and free-text search.
 - **Count-up clock**: records how long every pick took. After a configurable warning time (default **2:00**), the clock turns red and the partner on the clock hears a beep. There is **no time limit**. The clock can be paused; the commissioner can undo the last pick or draft on someone's behalf.
 - **Two kinds of draft**
   - **Season draft**: preseason + regular season. Each pick takes the **pair** of seats. The order is snake (or linear), and leftover games go to the first picks in the order.
-  - **Playoff draft**: run separately, closer to the playoffs. Each pick takes **one seat**, so two partners can end up at the same game. Games can be added as they're scheduled (opponent can be `TBD`).
+  - **Playoff draft**: run separately, closer to the playoffs. Each pick takes **one seat**, so two partners can end up at the same game (one partner may take both seats if both are still open on their turn). The order is **drawn at random by the app** when the draft is created, so it can't be re-rolled. Games can be added as they're scheduled (opponent can be `TBD`).
 - **Live or by email**: a live draft updates instantly for everyone. An email draft sends a "you're on the clock" message after each pick, and anyone can re-send a reminder (✉ button). The home page shows who's on the clock and for how long.
 - **Trades**: once a draft is complete, any partner can propose a trade (games for games, or a one-sided give or request) with a message. The other partner accepts or declines, and the proposer can withdraw. Games already played can't be traded. Trades update current holdings; the original draft results are preserved.
 - **History**: every draft is kept, with the draft order, each partner's holdings, dollar value and pick-time stats, a results-by-round grid, and a timestamped pick log. Past drafts can be imported from a spreadsheet.

@@ -254,14 +254,21 @@ app.post('/api/drafts', auth, admin, (req, res) => {
   if (!Array.isArray(games) || !games.length) fail(400, 'The schedule has no games');
   const k = kind === 'playoff' ? 'playoff' : 'season';
   const clean = games.map(g => cleanGame(g, k));
+  // Playoff order is drawn at random each year — by the server, so it can't be re-rolled.
+  let order = user_ids.map(Number);
+  let notes = '';
+  if (k === 'playoff') {
+    for (let i = order.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [order[i], order[j]] = [order[j], order[i]]; }
+    notes = `Draft order drawn at random by the app on ${new Date().toLocaleString('en-US', { timeZone: 'America/Toronto', dateStyle: 'medium', timeStyle: 'short' })} (Toronto time)`;
+  }
   const id = tx(() => {
-    const d = db.prepare(`INSERT INTO drafts (name, season, kind, seat_mode, mode, order_type, warn_secs, created_by)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    const d = db.prepare(`INSERT INTO drafts (name, season, kind, seat_mode, mode, order_type, warn_secs, created_by, notes)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(name.trim(), (season || '').trim(), k, k === 'playoff' ? 'single' : 'pair', mode === 'async' ? 'async' : 'live',
-        order_type === 'linear' ? 'linear' : 'snake', Math.max(0, Number(warn_secs ?? 120) || 0), req.user.id);
+        order_type === 'linear' ? 'linear' : 'snake', Math.max(0, Number(warn_secs ?? 120) || 0), req.user.id, notes);
     const draftId = Number(d.lastInsertRowid);
     const insO = db.prepare('INSERT INTO draft_order (draft_id, position, user_id) VALUES (?, ?, ?)');
-    user_ids.forEach((uid, i) => insO.run(draftId, i + 1, uid));
+    order.forEach((uid, i) => insO.run(draftId, i + 1, uid));
     const insG = db.prepare('INSERT INTO games (draft_id, date, time, opponent, type, price, notes) VALUES (?, ?, ?, ?, ?, ?, ?)');
     clean.forEach(g => insG.run(draftId, g.date, g.time, g.opponent, g.type, g.price, g.notes));
     return draftId;
@@ -524,7 +531,7 @@ app.post('/api/history/bundled', auth, admin, (req, res) => {
 app.get('/api/history/summary', auth, (_req, res) => {
   res.json(db.prepare(`
     SELECT d.id AS draft_id, d.name, d.season, d.kind, d.status, d.source, p.owner_id AS user_id,
-           COUNT(*) AS games, SUM(CASE WHEN p.seat = 0 THEN COALESCE(g.price, 0) * g.seats ELSE COALESCE(g.price, 0) END) AS value,
+           COUNT(*) AS games, SUM(CASE WHEN p.seat = 0 THEN COALESCE(g.price, 0) ELSE COALESCE(g.price, 0) * 1.0 / g.seats END) AS value,
            SUM(CASE WHEN strftime('%w', g.date) IN ('0', '5', '6') THEN 1 ELSE 0 END) AS weekend,
            SUM(CASE WHEN strftime('%w', g.date) = '6' THEN 1 ELSE 0 END) AS saturday
     FROM picks p JOIN drafts d ON d.id = p.draft_id JOIN games g ON g.id = p.game_id

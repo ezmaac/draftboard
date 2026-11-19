@@ -37,7 +37,8 @@
   const pickSeats = s => s.draft.seat_mode === 'single';
   const seatLabel = p => (p.seat ? ` · seat ${p.seat}` : '');
   const usersOf = s => Object.fromEntries(s.order.map(o => [o.user_id, { id: o.user_id, display_name: o.display_name, color: o.color }]));
-  const pickValue = (p, g) => (g.price || 0) * (p.seat ? 1 : g.seats);
+  // Prices are for the pair of seats (as in the Ticket Tracker); a single-seat pick is worth its share.
+  const pickValue = (p, g) => (g.price || 0) / (p.seat ? g.seats : 1);
 
   async function api(method, url, body) {
     const res = await fetch(url, {
@@ -275,13 +276,13 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
         <div class="panel">
           <div class="row spread"><h2 style="margin:0">Games (<span id="gCount">0</span>)</h2><span class="muted small">Review, remove, or add games before creating the draft.</span></div>
           <div class="table-wrap"><table class="games-table">
-            <thead><tr><th>Date</th><th>Time</th><th>Opponent</th><th>Type</th><th>Price / seat</th><th>Notes</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Time</th><th>Opponent</th><th>Type</th><th>Price (pair)</th><th>Notes</th><th></th></tr></thead>
             <tbody id="gRows"></tbody>
             <tfoot><tr>
               <td><input type="date" id="aDate"></td><td><input type="time" id="aTime" value="19:00"></td>
               <td><select id="aOpp">${teamOptions()}</select></td>
               <td><select id="aType"><option value="preseason">Preseason</option><option value="regular" selected>Regular</option><option value="playoff">Playoff</option></select></td>
-              <td><input type="number" id="aPrice" min="0" placeholder="$"></td><td><input type="text" id="aNotes" placeholder="e.g. Rd 1 Gm 2"></td>
+              <td><input type="number" id="aPrice" min="0" placeholder="$ pair"></td><td><input type="text" id="aNotes" placeholder="e.g. Rd 1 Gm 2"></td>
               <td><button class="btn sm" id="addGame">Add</button></td></tr></tfoot>
           </table></div>
         </div>
@@ -297,6 +298,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       kind = $('#dKind').value; setName();
       if (kind === 'playoff') { $('#src').value = 'none'; $('#aType').value = 'playoff'; $('#src').onchange(); games = []; renderGames(); }
       else $('#aType').value = 'regular';
+      renderOrder();
       renderSummary();
     };
     $('#dMode').onchange = () => { if ($('#dMode').value === 'async') $('#dWarn').value = 0; };
@@ -310,6 +312,11 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       }));
     };
     const renderOrder = () => {
+      $('#shuffle').hidden = kind === 'playoff';
+      if (kind === 'playoff') {
+        $('#order').innerHTML = `<li class="muted">🎲 Playoff order is drawn at random by the app when you create the draft — ${order.length} partners.</li>`;
+        renderSummary(); return;
+      }
       $('#order').innerHTML = order.map((id, i) => `
         <li><span class="pos">${i + 1}</span>${avatar(byId[id])}<span class="name">${esc(byId[id].display_name)}</span>
         <button class="icon-btn" data-up="${i}" ${i === 0 ? 'disabled' : ''}>▲</button>
@@ -655,7 +662,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
           }
           return `<button class="card ${t.div} ${selected === g.id ? 'selected' : ''}" data-game="${g.id}">
             <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${fmtTime(g.time)}</span></div>
-            <div class="city"><span>${esc(t.city)}</span><span>${fmtMoney(g.price)}</span></div>
+            <div class="city"><span>${esc(t.city)}</span><span title="Price for the pair">${fmtMoney(g.price)}</span></div>
             <div class="opp">${esc(t.name)}</div>
             ${g.notes ? `<div class="note">★ ${esc(g.notes)}</div>` : ''}
             ${single && gp.length ? `<div class="seats">${left} seat${left === 1 ? '' : 's'} left</div>${gp.map(p => ownerLine(p, users)).join('')}` : ''}
@@ -700,7 +707,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       modal(`
         <div class="muted small">ROUND ${s.on_clock.round} · PICK ${s.on_clock.pick_in_round} · ${behalf ? `ON BEHALF OF ${esc(forUser.display_name.toUpperCase())}` : 'YOUR PICK'}</div>
         <div class="big">${esc(t.city)} ${esc(t.name)}</div>
-        <p>${fmtGameDate(g)} · ${fmtTime(g.time)}${g.price ? ` · ${fmtMoney(g.price)}/seat` : ''}${g.notes ? ` · ${esc(g.notes)}` : ''}</p>
+        <p>${fmtGameDate(g)} · ${fmtTime(g.time)}${g.price ? ` · ${fmtMoney(g.price)} for the pair${pickSeats(s) ? ` (${fmtMoney(g.price / g.seats)}/seat)` : ''}` : ''}${g.notes ? ` · ${esc(g.notes)}` : ''}</p>
         ${pickSeats(s) ? `<p class="muted">One seat (seat ${taken.length + 1} of ${g.seats})${taken.length ? ` — the other is held by ${esc(usersOf(s)[taken[0].owner_id].display_name)}` : ''}.</p>` : ''}
         <div class="row"><button class="btn go" id="confirmPick">Lock it in</button><button class="btn" data-close>Cancel</button></div>`,
         ($m, close) => {
@@ -724,7 +731,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       <h2>Add a game</h2>
       <div class="field"><label>Date</label><input type="date" id="mDate"></div>
       <div class="row"><div class="field" style="flex:1"><label>Time</label><input type="time" id="mTime" value="19:00"></div>
-        <div class="field" style="flex:1"><label>Price / seat</label><input type="number" id="mPrice" min="0"></div></div>
+        <div class="field" style="flex:1"><label>Price (pair)</label><input type="number" id="mPrice" min="0"></div></div>
       <div class="field"><label>Opponent</label><select id="mOpp">${teamOptions()}</select></div>
       <div class="field"><label>Type</label><select id="mType"><option value="regular">Regular season</option><option value="preseason">Preseason</option><option value="playoff" ${s.draft.kind === 'playoff' ? 'selected' : ''}>Playoff</option></select></div>
       <div class="field"><label>Notes</label><input type="text" id="mNotes" placeholder="e.g. Rd 1 Gm 2"></div>
@@ -896,7 +903,7 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
     let draftId = Number(sessionStorage.getItem('tradeDraft')) || tradable[0]?.id;
     if (!tradable.some(d => d.id === draftId)) draftId = tradable[0]?.id;
 
-    const itemList = items => items.map(i => `<li>${esc(gameName(i))}${i.seat ? ` · seat ${i.seat}` : ''}${i.price ? ` <span class="muted">${fmtMoney(i.price * (i.seat ? 1 : 2))}</span>` : ''}</li>`).join('') || '<li class="muted">nothing</li>';
+    const itemList = items => items.map(i => `<li>${esc(gameName(i))}${i.seat ? ` · seat ${i.seat}` : ''}${i.price ? ` <span class="muted">${fmtMoney(i.seat ? i.price / 2 : i.price)}</span>` : ''}</li>`).join('') || '<li class="muted">nothing</li>';
     const tradeCard = t => {
       const from = userMap[t.from_user], to = userMap[t.to_user];
       const incoming = t.to_user === me && t.status === 'pending';

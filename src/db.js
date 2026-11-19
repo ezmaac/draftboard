@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS games (
   time      TEXT NOT NULL,    -- HH:MM 24h, Toronto time
   opponent  TEXT NOT NULL,    -- team abbreviation or TBD
   type      TEXT NOT NULL DEFAULT 'regular',  -- preseason | regular | playoff
-  price     REAL,             -- per seat
+  price     REAL,             -- for the pair of seats
   seats     INTEGER NOT NULL DEFAULT 2,
   notes     TEXT NOT NULL DEFAULT ''
 );

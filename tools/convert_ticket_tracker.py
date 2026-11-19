@@ -54,6 +54,9 @@ TEAM_ALIASES = {
     'washington': 'Washington Capitals', 'capitals': 'Washington Capitals', 'wsh': 'Washington Capitals', 'was': 'Washington Capitals', 'wash': 'Washington Capitals',
     'winnipeg': 'Winnipeg Jets', 'jets': 'Winnipeg Jets', 'wpg': 'Winnipeg Jets', 'win': 'Winnipeg Jets', 'winn': 'Winnipeg Jets',
 }
+# Corrections confirmed by the partners.
+TEAM_FIXES = {('2003-04', '2004-02-12'): 'Columbus Blue Jackets'}   # sheet says "Feb"
+COUNT_TALLY_WRONG = {'2012-13'}  # sheet tally said Abela 9; the 8 listed games are right
 MONTHS = {m: i + 1 for i, m in enumerate(['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'])}
 
 
@@ -146,14 +149,19 @@ def convert_sheet(ws):
     for i, r in enumerate(rows[:12]):
         for j, c in enumerate(r):
             if isinstance(c, str) and c.strip() == 'Selection Order' and i != hi:
+                found = []
                 for k in range(i + 1, i + 8):
                     rr = rows[k]
                     if isinstance(rr[j], (int, float)) and partner(rr[j + 1]):
-                        order.append(partner(rr[j + 1]))
-                        if isinstance(rr[j + 2], (int, float)): counts[partner(rr[j + 1])] = int(rr[j + 2])
-                        if j + 3 < len(rr) and isinstance(rr[j + 3], (int, float)) and rr[j + 3]: values[partner(rr[j + 1])] = rr[j + 3]
-                    elif order:
+                        who = partner(rr[j + 1])
+                        found.append((rr[j], who))
+                        # [position, name, # of picks, ticket value] — only trust the numbers when the layout matches
+                        if isinstance(rr[j + 2], (int, float)):
+                            counts[who] = int(rr[j + 2])
+                            if j + 3 < len(rr) and isinstance(rr[j + 3], (int, float)) and rr[j + 3]: values[who] = rr[j + 3]
+                    elif found:
                         break
+                order = [w for _, w in sorted(found, key=lambda f: f[0])]  # rows aren't always in position order
     if not order:
         # 2002-2008: rows like [2,'Abela'] / ['a','Abela'] above the game list
         slots = []
@@ -196,6 +204,7 @@ def convert_sheet(ws):
         tcol = next((j for j in range(dcol + 1, min(dcol + 3, len(r))) if isinstance(r[j], str) and r[j].strip()), None)
         raw_team = r[tcol] if tcol is not None else ''
         name, pre = team_name(raw_team, year or date.year)
+        name = TEAM_FIXES.get((season, date.isoformat()), name)
         tier = fold(r[c_tier]) if c_tier is not None and c_tier < len(r) and r[c_tier] else ''
         # The regular season has never started in September, so past September games are preseason.
         # (2026-27 onward is left as the sheet says.)
@@ -241,10 +250,28 @@ def convert_sheet(ws):
     else:
         picks.sort(key=lambda p: p['date'])
         for p in picks: p['pick'] = None; p['seconds'] = ''
+    # Prices are stored per pair of seats. Some seasons' sheets list a per-seat price and double it
+    # in the "Ticket Value" tally — detect that from the sheet's own totals and convert.
+    if values:
+        sums = {w: sum(p['price'] or 0 for p in picks if p['partner'] == w) for w in values}
+        if all(sums[w] and abs(values[w] - 2 * sums[w]) < 1 for w in values):
+            for g in picks + unassigned:
+                if g['price'] != '': g['price'] = g['price'] * 2
+            report.append('prices in this sheet were per seat; doubled to the pair price to match its Ticket Value')
+        else:
+            last = max(picks, key=lambda p: p['date']) if picks else None
+            for w in values:
+                diff = sums[w] - values[w]
+                if abs(diff) < 1: continue
+                if last and last['partner'] == w and abs(diff - (last['price'] or 0)) < 1:
+                    report.append(f"sheet's Ticket Value formula skips the last row, so it leaves out {w}'s "
+                                  f"{last['date']} game (${last['price']:g}); totals here include it")
+                else:
+                    report.append(f'{w}: prices add up to ${sums[w]:g} but the sheet Ticket Value says ${values[w]:g}')
     # sanity vs counts block
     got = {}
     for p in picks: got[p['partner']] = got.get(p['partner'], 0) + 1
-    for who, n in counts.items():
+    for who, n in ({} if season in COUNT_TALLY_WRONG else counts).items():
         if got.get(who, 0) != n: report.append(f'{who}: sheet says {n} picks, found {got.get(who, 0)}')
     if not order: order = list(dict.fromkeys(p['partner'] for p in picks)); report.append('no selection order block; order guessed')
     return {
