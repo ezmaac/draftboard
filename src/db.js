@@ -119,6 +119,16 @@ const draftCols = db.prepare('PRAGMA table_info(drafts)').all().map(c => c.name)
 if (!draftCols.includes('notes')) db.exec("ALTER TABLE drafts ADD COLUMN notes TEXT NOT NULL DEFAULT ''");
 // 0 for imported seasons where only who-got-which-game was recorded, not the pick sequence.
 if (!draftCols.includes('order_recorded')) db.exec('ALTER TABLE drafts ADD COLUMN order_recorded INTEGER NOT NULL DEFAULT 1');
+const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+if (!userCols.includes('active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+// Profiles with draft history are "removed" rather than erased so past results stay intact.
+if (!userCols.includes('deleted_at')) db.exec('ALTER TABLE users ADD COLUMN deleted_at INTEGER');
+db.exec(`CREATE TABLE IF NOT EXISTS password_resets (
+  token_hash TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  used_at    INTEGER
+)`);
 db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 
 module.exports = db;

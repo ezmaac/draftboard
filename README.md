@@ -33,6 +33,13 @@ The **first account created becomes the commissioner**, who creates, starts and 
 | `SMTP_URL` | *(unset)* | e.g. `smtps://you%40gmail.com:APP_PASSWORD@smtp.gmail.com`. Unset = emails are only printed to the server log. |
 | `MAIL_FROM` | `Leafs Ticket Draft <no-reply@localhost>` | Sender address |
 
+## Commissioner tools
+- **Partners** page: activate or deactivate partners (inactive partners can't log in and aren't offered for new drafts), make or remove commissioners, create a password-reset link to send by text, or delete a profile. Deleting someone with draft history keeps their name on past results and removes everything else.
+- **New draft:** pick which partners take part (any number, 2+). The order pre-fills by rotating last season's order (the final pick moves to first), with last season's order shown for reference. Playoff drafts draw a random order.
+- **On the board (⚙):** pause or resume, restart the current pick's clock, undo the last pick, restart the draft from pick 1, or reset it to setup to change partners and order.
+- **Forgot password:** emailed reset link (2 hours, single use). Until email is configured, use the commissioner's reset link.
+- **Team logos** load from the NHL's public logo server. Set `LOGO_URL` to another address pattern (`{abbr}`, `{variant}`), or to an empty value to turn logos off.
+
 ## Schedules
 `schedules/*.csv` appear as "official" sources when you create a draft. `TML_2026-2027.csv` (42 home games) is included. Any CSV with a header row containing **Date** and **Team** (or Opponent) works. **Time**, **Type** (`Pre-Season` / `Regular Season` / `Playoffs`), **Price** and **Notes** are optional, and extra columns are ignored. Dates can be `29-Sep-26`, `2026-09-29` or `9/29/2026`. Games can also be added or removed by hand before a draft is created, and the commissioner can add games to an unfinished draft (**+ Game** on the board).
 

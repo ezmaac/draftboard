@@ -57,6 +57,7 @@ function parseCookies(header = '') {
 const publicUser = u => u && ({
   id: u.id, username: u.username, display_name: u.display_name, email: u.email, notify_email: !!u.notify_email,
   color: u.color, favorite_player: u.favorite_player, is_admin: !!u.is_admin, created_at: u.created_at,
+  active: !!u.active && !u.deleted_at, deleted: !!u.deleted_at,
 });
 const getUser = id => db.prepare('SELECT * FROM users WHERE id = ?').get(id);
 
@@ -71,7 +72,7 @@ app.use((req, _res, next) => {
   const sid = parseCookies(req.headers.cookie).sid;
   if (sid) {
     const row = db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-                            WHERE s.token = ? AND s.expires_at > ?`).get(sid, Date.now());
+                            WHERE s.token = ? AND s.expires_at > ? AND u.active = 1 AND u.deleted_at IS NULL`).get(sid, Date.now());
     if (row) { req.user = row; req.sid = sid; }
   }
   next();
@@ -81,6 +82,39 @@ const auth = (req, _res, next) => (req.user ? next() : next(new HttpError(401, '
 const admin = (req, _res, next) => (req.user?.is_admin ? next() : next(new HttpError(403, 'Commissioner only')));
 
 // ---------------------------------------------------------------- draft logic
+
+function validateParticipants(ids) {
+  if (!Array.isArray(ids) || ids.length < 2) fail(400, 'Choose at least two participating partners');
+  if (new Set(ids).size !== ids.length) fail(400, 'A partner appears twice in the draft order');
+  for (const id of ids) {
+    const u = getUser(id);
+    if (!u || u.deleted_at || !u.active) fail(400, `${u ? u.display_name : 'A partner'} is not an active partner`);
+  }
+}
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+const randomNote = () => `Draft order drawn at random by the app on ${new Date().toLocaleString('en-US', { timeZone: 'America/Toronto', dateStyle: 'medium', timeStyle: 'short' })} (Toronto time)`;
+
+/**
+ * Suggested order for the next season draft: last year's order rotated so the last pick
+ * moves to first (the partners' tradition: Q/Abela/Pope -> Pope/Q/Abela -> Abela/Pope/Q).
+ * Partners who sat out last year, or are new, go to the end; inactive partners are dropped.
+ */
+function nextSeasonOrder() {
+  const prev = db.prepare(`SELECT * FROM drafts WHERE kind = 'season' AND status != 'setup'
+                           ORDER BY season DESC, id DESC LIMIT 1`).get();
+  const active = db.prepare('SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL ORDER BY id').all().map(u => u.id);
+  if (!prev) return { previous: null, suggested: active };
+  const prevOrder = db.prepare(`SELECT o.position, o.user_id, u.display_name, u.color FROM draft_order o JOIN users u ON u.id = o.user_id
+                                WHERE o.draft_id = ? ORDER BY o.position`).all(prev.id);
+  const ids = prevOrder.map(o => o.user_id);
+  const rotated = ids.length ? [ids[ids.length - 1], ...ids.slice(0, -1)] : [];
+  const suggested = [...rotated.filter(id => active.includes(id)), ...active.filter(id => !ids.includes(id))];
+  return { previous: { id: prev.id, name: prev.name, season: prev.season, order: prevOrder }, suggested };
+}
 
 /** Who picks at a given 0-based overall pick index. Extra picks fall to the top of the order. */
 function slotFor(overallIdx, order, orderType) {
@@ -166,7 +200,8 @@ app.post('/api/register', (req, res) => {
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username || '');
-  if (!u || !checkPassword(password || '', u.password_hash)) fail(401, 'Wrong username or password');
+  if (!u || u.deleted_at || !checkPassword(password || '', u.password_hash)) fail(401, 'Wrong username or password');
+  if (!u.active) fail(403, 'This account has been deactivated — ask the commissioner');
   createSession(req, res, u.id);
   res.json({ user: publicUser(u) });
 });
@@ -177,7 +212,9 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null, mail_enabled: mail.enabled }));
+// Team logo images: {abbr} and {variant} (light|dark) are filled in. Set LOGO_URL='' to turn logos off.
+const LOGO_URL = process.env.LOGO_URL ?? 'https://assets.nhle.com/logos/nhl/svg/{abbr}_{variant}.svg';
+app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) || null, mail_enabled: mail.enabled, logo_url: LOGO_URL }));
 
 app.put('/api/me', auth, (req, res) => {
   const { display_name, email, color, favorite_player, notify_email } = req.body || {};
@@ -195,6 +232,97 @@ app.put('/api/me/password', auth, (req, res) => {
   if (!next || next.length < 6) fail(400, 'New password must be at least 6 characters');
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(next), req.user.id);
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- password reset
+
+const RESET_HOURS = 2;
+const sha256 = s => crypto.createHash('sha256').update(s).digest('hex');
+function createResetLink(userId) {
+  const token = crypto.randomBytes(24).toString('base64url');
+  db.prepare('DELETE FROM password_resets WHERE user_id = ? OR expires_at < ?').run(userId, Date.now());
+  db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+    .run(sha256(token), userId, Date.now() + RESET_HOURS * 3600000);
+  return `${mail.APP_URL}/#/reset/${token}`;
+}
+
+// Always answers the same way so it can't be used to discover accounts.
+app.post('/api/password/forgot', (req, res) => {
+  const login = String(req.body?.login || '').trim();
+  const u = login && db.prepare('SELECT * FROM users WHERE (username = ? OR lower(email) = lower(?)) AND active = 1 AND deleted_at IS NULL').get(login, login);
+  if (u?.email) {
+    mail.send(u.email, '🍁 Reset your Leafs Ticket Draft password',
+      `Hi ${u.display_name},\n\nSomeone (hopefully you) asked to reset your password. This link works for ${RESET_HOURS} hours:\n\n${createResetLink(u.id)}\n\nIf you didn't ask, ignore this email.`);
+  }
+  res.json({ ok: true, mail_enabled: mail.enabled });
+});
+
+app.post('/api/password/reset', (req, res) => {
+  const { token, password } = req.body || {};
+  if (!password || password.length < 6) fail(400, 'Password must be at least 6 characters');
+  const r = db.prepare('SELECT * FROM password_resets WHERE token_hash = ?').get(sha256(String(token || '')));
+  if (!r || r.used_at || r.expires_at < Date.now()) fail(400, 'This reset link is invalid or has expired — ask for a new one');
+  const u = getUser(r.user_id);
+  if (!u || u.deleted_at || !u.active) fail(400, 'This account is not active');
+  tx(() => {
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), u.id);
+    db.prepare('UPDATE password_resets SET used_at = ? WHERE token_hash = ?').run(Date.now(), r.token_hash);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  });
+  createSession(req, res, u.id);
+  res.json({ user: publicUser(getUser(u.id)) });
+});
+
+// ---------------------------------------------------------------- partner management (commissioner)
+
+const activeAdmins = () => db.prepare('SELECT COUNT(*) c FROM users WHERE is_admin = 1 AND active = 1 AND deleted_at IS NULL').get().c;
+
+app.put('/api/users/:id', auth, admin, (req, res) => {
+  const u = getUser(req.params.id);
+  if (!u || u.deleted_at) fail(404, 'Partner not found');
+  const { active, is_admin } = req.body || {};
+  const losingAdmin = (active === false && u.is_admin) || (is_admin === false && u.is_admin);
+  if (losingAdmin && activeAdmins() <= 1) fail(400, 'There must be at least one active commissioner');
+  if (active === false && u.id === req.user.id) fail(400, "You can't deactivate your own account");
+  if (active !== undefined) db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, u.id);
+  if (is_admin !== undefined) db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(is_admin ? 1 : 0, u.id);
+  if (active === false) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  res.json({ user: publicUser(getUser(u.id)) });
+});
+
+app.delete('/api/users/:id', auth, admin, (req, res) => {
+  const u = getUser(req.params.id);
+  if (!u || u.deleted_at) fail(404, 'Partner not found');
+  if (u.id === req.user.id) fail(400, "You can't delete your own profile");
+  if (u.is_admin && activeAdmins() <= 1) fail(400, 'There must be at least one active commissioner');
+  const live = db.prepare(`SELECT d.name FROM draft_order o JOIN drafts d ON d.id = o.draft_id
+                           WHERE o.user_id = ? AND d.status != 'complete' LIMIT 1`).get(u.id);
+  if (live) fail(400, `Remove them from "${live.name}" first (reset the draft to setup and edit its partners)`);
+  const hasHistory = db.prepare('SELECT 1 FROM picks WHERE user_id = ? OR owner_id = ? LIMIT 1').get(u.id, u.id)
+    || db.prepare('SELECT 1 FROM draft_order WHERE user_id = ? LIMIT 1').get(u.id);
+  tx(() => {
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+    db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(u.id);
+    db.prepare("UPDATE trades SET status = 'cancelled', resolved_at = ? WHERE status = 'pending' AND (from_user = ? OR to_user = ?)").run(Date.now(), u.id, u.id);
+    if (hasHistory) {
+      // Keep the name on past results; remove everything else and free the username.
+      db.prepare(`UPDATE users SET deleted_at = ?, active = 0, is_admin = 0, email = NULL, favorite_player = NULL,
+                  username = ?, password_hash = ? WHERE id = ?`)
+        .run(Date.now(), `deleted-${u.id}-${crypto.randomBytes(3).toString('hex')}`, hashPassword(crypto.randomBytes(16).toString('hex')), u.id);
+    } else {
+      db.prepare('DELETE FROM trades WHERE from_user = ? OR to_user = ?').run(u.id, u.id);
+      db.prepare('DELETE FROM users WHERE id = ?').run(u.id);
+    }
+  });
+  res.json({ ok: true, kept_history: !!hasHistory });
+});
+
+app.post('/api/users/:id/reset-link', auth, admin, (req, res) => {
+  const u = getUser(req.params.id);
+  if (!u || u.deleted_at) fail(404, 'Partner not found');
+  const link = createResetLink(u.id);
+  if (u.email) mail.send(u.email, '🍁 Password reset from the commissioner', `Hi ${u.display_name},\n\nUse this link within ${RESET_HOURS} hours to set a new password:\n\n${link}`);
+  res.json({ link, emailed: !!u.email && mail.enabled, hours: RESET_HOURS });
 });
 
 // ---------------------------------------------------------------- data routes
@@ -249,18 +377,14 @@ function cleanGame(g, kind) {
 app.post('/api/drafts', auth, admin, (req, res) => {
   const { name, season, kind, mode, order_type, warn_secs, user_ids, games } = req.body || {};
   if (!name?.trim()) fail(400, 'Name is required');
-  if (!Array.isArray(user_ids) || user_ids.length < 2) fail(400, 'Choose at least two partners for the draft order');
-  if (new Set(user_ids).size !== user_ids.length) fail(400, 'A partner appears twice in the draft order');
+  validateParticipants((user_ids || []).map(Number));
   if (!Array.isArray(games) || !games.length) fail(400, 'The schedule has no games');
   const k = kind === 'playoff' ? 'playoff' : 'season';
   const clean = games.map(g => cleanGame(g, k));
   // Playoff order is drawn at random each year — by the server, so it can't be re-rolled.
   let order = user_ids.map(Number);
   let notes = '';
-  if (k === 'playoff') {
-    for (let i = order.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [order[i], order[j]] = [order[j], order[i]]; }
-    notes = `Draft order drawn at random by the app on ${new Date().toLocaleString('en-US', { timeZone: 'America/Toronto', dateStyle: 'medium', timeStyle: 'short' })} (Toronto time)`;
-  }
+  if (k === 'playoff') { order = shuffle(order); notes = randomNote(); }
   const id = tx(() => {
     const d = db.prepare(`INSERT INTO drafts (name, season, kind, seat_mode, mode, order_type, warn_secs, created_by, notes)
                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -295,6 +419,8 @@ app.delete('/api/drafts/:id', auth, admin, (req, res) => {
   db.prepare('DELETE FROM drafts WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
+
+app.get('/api/drafts/next-order', auth, admin, (_req, res) => res.json(nextSeasonOrder()));
 
 app.get('/api/drafts/:id', auth, (req, res) => res.json(draftState(req.params.id)));
 
@@ -362,9 +488,54 @@ app.post('/api/drafts/:id/pause', auth, (req, res) => {
   const id = Number(req.params.id);
   const d = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
   if (!d || d.status !== 'live') fail(400, 'Draft is not live');
+  if (!req.user.is_admin && draftState(id).on_clock?.user_id !== req.user.id) fail(403, 'Only the commissioner or the partner on the clock can pause');
   const now = Date.now();
   if (d.paused_at) db.prepare('UPDATE drafts SET paused_ms = paused_ms + ?, paused_at = NULL WHERE id = ?').run(now - d.paused_at, id);
   else db.prepare('UPDATE drafts SET paused_at = ? WHERE id = ?').run(now, id);
+  broadcast(id);
+  res.json(draftState(id));
+});
+
+// Commissioner controls: restart the current pick's clock, restart the draft, or reset it to setup.
+app.post('/api/drafts/:id/control', auth, admin, (req, res) => {
+  const id = Number(req.params.id);
+  const { action } = req.body || {};
+  const d = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
+  if (!d) fail(404, 'Draft not found');
+  if (d.source === 'import') fail(400, 'Imported drafts cannot be changed here');
+  const now = Date.now();
+  const clearPicks = () => {
+    db.prepare("DELETE FROM trades WHERE draft_id = ?").run(id);
+    db.prepare('DELETE FROM picks WHERE draft_id = ?').run(id);
+  };
+  if (action === 'reset_clock') {
+    if (d.status !== 'live') fail(400, 'Draft is not live');
+    db.prepare('UPDATE drafts SET clock_started_at = ?, paused_ms = 0, paused_at = CASE WHEN paused_at IS NULL THEN NULL ELSE ? END WHERE id = ?').run(now, now, id);
+  } else if (action === 'restart') {
+    tx(() => { clearPicks(); db.prepare("UPDATE drafts SET status = 'live', started_at = ?, completed_at = NULL, clock_started_at = ?, paused_ms = 0, paused_at = NULL WHERE id = ?").run(now, now, id); });
+    if (d.mode === 'async') notifyOnClock(id);
+  } else if (action === 'reset') {
+    tx(() => { clearPicks(); db.prepare("UPDATE drafts SET status = 'setup', started_at = NULL, completed_at = NULL, clock_started_at = NULL, paused_ms = 0, paused_at = NULL WHERE id = ?").run(id); });
+  } else fail(400, 'Unknown action');
+  broadcast(id); broadcast('home'); broadcast('trades');
+  res.json(draftState(id));
+});
+
+// Change who's in a draft that hasn't started, and their order (playoff drafts re-draw at random).
+app.put('/api/drafts/:id/order', auth, admin, (req, res) => {
+  const id = Number(req.params.id);
+  const d = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
+  if (!d) fail(404, 'Draft not found');
+  if (d.status !== 'setup') fail(400, 'Reset the draft to setup before changing partners');
+  let ids = (req.body?.user_ids || []).map(Number);
+  validateParticipants(ids);
+  let notes = d.notes;
+  if (d.kind === 'playoff') { ids = shuffle(ids); notes = randomNote(); }
+  tx(() => {
+    db.prepare('DELETE FROM draft_order WHERE draft_id = ?').run(id);
+    ids.forEach((uid, i) => db.prepare('INSERT INTO draft_order (draft_id, position, user_id) VALUES (?, ?, ?)').run(id, i + 1, uid));
+    db.prepare('UPDATE drafts SET notes = ? WHERE id = ?').run(notes, id);
+  });
   broadcast(id);
   res.json(draftState(id));
 });

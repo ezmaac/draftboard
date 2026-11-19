@@ -256,3 +256,23 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
   .toolbar select, .toolbar input[type=text] { min-width: 0; flex: 1 1 140px; }
   .toolbar .search { max-width: none; }
 }
+
+/* ---------- team logos */
+.logo { width: 30px; height: 30px; object-fit: contain; flex: none; }
+.logo.sm { width: 20px; height: 20px; }
+.logo.xs { width: 18px; height: 18px; vertical-align: -4px; margin-right: 5px; }
+.logo.lg { width: 56px; height: 56px; }
+.muted-logo { opacity: .45; filter: grayscale(1); }
+.card .opp { display: flex; align-items: center; gap: 6px; }
+.card .opp span, .rg-cell .o span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-cell .o { display: flex; align-items: center; gap: 5px; }
+.with-logo { white-space: normal; }
+.ticker .logo.xs { vertical-align: -3px; }
+
+/* ---------- commissioner */
+.ctrl-list { display: flex; flex-direction: column; gap: 8px; }
+.ctrl-list .btn { justify-content: flex-start; text-align: left; }
+.ctrl-list .btn .muted { text-transform: none; font-family: var(--body); font-weight: 500; font-size: .8rem; letter-spacing: 0; }
+.prev-order { background: var(--panel-2); border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.prev-order .k { width: 100%; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+.prev-order span { font-family: var(--cond); font-weight: 700; font-size: 1.05rem; }

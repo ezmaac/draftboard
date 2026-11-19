@@ -6,7 +6,7 @@
   const $toast = document.getElementById('toast');
   const BASE_TITLE = 'Leafs Ticket Draft';
 
-  const state = { me: null, mailEnabled: false, teams: [], teamMap: {} };
+  const state = { me: null, mailEnabled: false, logoUrl: '', teams: [], teamMap: {} };
   let cleanup = null; // teardown for the current view (timers, SSE)
   let routeSeq = 0;   // bumps on every navigation so slow-loading views can tell they're stale
   /** Register teardown for the view started at `seq`; if the user already navigated away, tear down now. */
@@ -33,6 +33,9 @@
   const initials = name => (name || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
   const avatar = (u, cls = '') => `<span class="avatar ${cls}" style="background:${esc(u?.color || '#555')}">${esc(initials(u?.display_name))}</span>`;
   const team = abbr => state.teamMap[abbr] || { abbr, city: abbr === 'TBD' ? 'To be' : '', name: abbr === 'TBD' ? 'Determined' : abbr, div: 'TBD' };
+  /** Team logo <img>; 'light' variant for light/coloured backgrounds, 'dark' for dark ones. Hidden if it fails to load. */
+  const logo = (abbr, variant = 'dark', cls = '') => (state.logoUrl && abbr && abbr !== 'TBD'
+    ? `<img class="logo ${cls}" src="${esc(state.logoUrl.replace('{abbr}', abbr).replace('{variant}', variant))}" alt="" loading="lazy" onerror="this.remove()">` : '');
   const gameName = g => { const t = team(g.opponent); return `${fmtGameDate(g)} · ${t.city} ${t.name}`; };
   const pickSeats = s => s.draft.seat_mode === 'single';
   const seatLabel = p => (p.seat ? ` · seat ${p.seat}` : '');
@@ -94,22 +97,27 @@
     [/^#\/history\/(\d+)$/, viewHistory],
     [/^#\/trades$/, viewTrades],
     [/^#\/profile$/, viewProfile],
+    [/^#\/partners$/, viewPartners],
+    [/^#\/forgot$/, viewForgot, { public: true }],
+    [/^#\/reset\/([\w-]+)$/, viewReset, { any: true }],
   ];
 
   async function route() {
     cleanup?.(); cleanup = null;
+    $modal.hidden = true; $modal.innerHTML = '';  // don't carry a popup onto the next page
     const seq = ++routeSeq;
     document.title = BASE_TITLE;
     const hash = location.hash || '#/';
     const match = routes.find(([re]) => re.test(hash));
     if (!match) { location.hash = '#/'; return; }
     const [re, view, opts = {}] = match;
-    if (!opts.public && !state.me) { location.hash = '#/login'; return; }
+    if (!opts.any && !opts.public && !state.me) { location.hash = '#/login'; return; }
     if (opts.public && state.me) { location.hash = '#/'; return; }
-    $nav.hidden = !state.me;
+    $nav.hidden = !state.me || !!opts.any;
+    document.getElementById('navPartners').hidden = !state.me?.is_admin;
     document.querySelectorAll('[data-nav]').forEach(a => {
       const n = a.dataset.nav;
-      a.classList.toggle('active', (n === 'home' && /^#\/?$|^#\/new|^#\/import|^#\/board/.test(hash)) || hash.startsWith(`#/${n}`));
+      a.classList.toggle('active', (n === 'home' && /^#\/?$|^#\/new|^#\/board/.test(hash)) || (n === 'history' && hash.startsWith('#/import')) || hash.startsWith(`#/${n}`));
     });
     if (state.me) updateTradeBadge();
     try { await view(...hash.match(re).slice(1)); }
@@ -146,6 +154,7 @@
         ${mode === 'register' ? `<div class="field"><label>Invite code</label><input type="text" name="invite_code" required></div>` : ''}
         <p class="error" id="authErr"></p>
         <button class="btn primary" style="width:100%">${mode === 'login' ? 'Log in' : 'Create account'}</button>
+        ${mode === 'login' ? '<p class="small" style="text-align:center;margin:14px 0 0"><a href="#/forgot">Forgot your password?</a></p>' : ''}
       </form></div>`;
       $app.querySelectorAll('[data-mode]').forEach(b => (b.onclick = () => { mode = b.dataset.mode; render(); }));
       $app.querySelector('#authForm').onsubmit = async e => {
@@ -158,6 +167,107 @@
       };
     };
     render();
+  }
+
+  function viewForgot() {
+    $app.innerHTML = `
+      <div class="auth-wrap"><form class="auth-card" id="fForm">
+        <div style="font-size:2.4rem">🍁</div><h1>Forgot<br>password</h1>
+        <p class="muted small">Enter your username or email. If it matches an account with an email address, we’ll send a reset link (valid for 2 hours).</p>
+        <div class="field"><label>Username or email</label><input type="text" name="login" required autocomplete="username"></div>
+        <p class="error" id="fMsg"></p>
+        <button class="btn primary" style="width:100%">Send reset link</button>
+        <p class="small muted" style="margin:14px 0 0">No email on your profile? Ask the commissioner — they can create a reset link for you.</p>
+        <p class="small" style="text-align:center"><a href="#/login">← Back to log in</a></p>
+      </form></div>`;
+    $app.querySelector('#fForm').onsubmit = async e => {
+      e.preventDefault();
+      const msg = $app.querySelector('#fMsg');
+      try {
+        const r = await api('POST', '/api/password/forgot', Object.fromEntries(new FormData(e.target)));
+        msg.style.color = 'var(--text)';
+        msg.textContent = r.mail_enabled ? 'If that matches an account, a reset link is on its way. Check your email.'
+          : 'Email isn’t set up on this server yet, so no email was sent. Ask the commissioner for a reset link.';
+      } catch (err) { msg.textContent = err.message; }
+    };
+  }
+
+  function viewReset(token) {
+    $app.innerHTML = `
+      <div class="auth-wrap"><form class="auth-card" id="rForm">
+        <div style="font-size:2.4rem">🍁</div><h1>Choose a new<br>password</h1>
+        <div class="field"><label>New password</label><input type="password" name="password" required minlength="6" autocomplete="new-password"></div>
+        <div class="field"><label>Confirm new password</label><input type="password" name="confirm" required minlength="6" autocomplete="new-password"></div>
+        <p class="error" id="rErr"></p>
+        <button class="btn primary" style="width:100%">Set password &amp; log in</button>
+      </form></div>`;
+    $app.querySelector('#rForm').onsubmit = async e => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      if (f.password !== f.confirm) { $app.querySelector('#rErr').textContent = 'Passwords don’t match'; return; }
+      try { const { user } = await api('POST', '/api/password/reset', { token, password: f.password }); state.me = user; toast('Password updated'); location.hash = '#/'; }
+      catch (err) { $app.querySelector('#rErr').textContent = err.message; }
+    };
+  }
+
+  async function viewPartners() {
+    if (!state.me.is_admin) { location.hash = '#/'; return; }
+    const seq = routeSeq;
+    const [users, summary] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/history/summary')]);
+    if (seq !== routeSeq) return;
+    const seasonsOf = uid => new Set(summary.filter(r => r.user_id === uid).map(r => r.draft_id)).size;
+    const shown = users.filter(u => !u.deleted);
+    const removed = users.filter(u => u.deleted);
+    $app.innerHTML = `
+      <div class="page">
+        <h1>Partners</h1>
+        <div class="panel">
+          <p class="muted small">Inactive partners can’t log in and aren’t offered for new drafts; their history stays. New partners join with the invite code.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Partner</th><th>Username</th><th>Email</th><th>Drafts</th><th>Role</th><th>Status</th><th></th></tr></thead>
+            <tbody>${shown.map(u => `<tr>
+              <td><div class="row" style="gap:8px">${avatar(u)} <b>${esc(u.display_name)}</b>${u.id === state.me.id ? ' <span class="muted small">(you)</span>' : ''}</div></td>
+              <td>@${esc(u.username)}</td><td>${esc(u.email || '—')}</td><td>${seasonsOf(u.id)}</td>
+              <td>${u.is_admin ? '<span class="pill complete">commissioner</span>' : 'partner'}</td>
+              <td>${u.active ? '<span class="pill complete">active</span>' : '<span class="pill setup">inactive</span>'}</td>
+              <td><div class="row" style="gap:6px;justify-content:flex-end">
+                ${u.id === state.me.id ? '' : `<button class="btn sm" data-act="${u.active ? 'deactivate' : 'activate'}" data-id="${u.id}">${u.active ? 'Deactivate' : 'Activate'}</button>`}
+                <button class="btn sm" data-act="${u.is_admin ? 'demote' : 'promote'}" data-id="${u.id}">${u.is_admin ? 'Remove commissioner' : 'Make commissioner'}</button>
+                <button class="btn sm" data-act="reset" data-id="${u.id}">Reset password</button>
+                ${u.id === state.me.id ? '' : `<button class="btn danger sm" data-act="delete" data-id="${u.id}">Delete</button>`}
+              </div></td></tr>`).join('')}</tbody>
+          </table></div>
+        </div>
+        ${removed.length ? `<div class="panel"><h2>Removed profiles</h2><p class="muted small">Kept by name only so past draft results stay complete: ${removed.map(u => esc(u.display_name)).join(', ')}.</p></div>` : ''}
+      </div>`;
+    const byId = Object.fromEntries(users.map(u => [u.id, u]));
+    $app.querySelectorAll('[data-act]').forEach(b => (b.onclick = async () => {
+      const u = byId[b.dataset.id], act = b.dataset.act;
+      try {
+        if (act === 'activate' || act === 'deactivate') {
+          if (act === 'deactivate' && !confirm(`Deactivate ${u.display_name}? They’ll be logged out, can’t log in, and won’t be offered for new drafts. Their history stays.`)) return;
+          await api('PUT', `/api/users/${u.id}`, { active: act === 'activate' });
+        } else if (act === 'promote' || act === 'demote') {
+          await api('PUT', `/api/users/${u.id}`, { is_admin: act === 'promote' });
+          if (u.id === state.me.id) state.me.is_admin = false;
+        } else if (act === 'delete') {
+          if (!confirm(`Delete ${u.display_name}’s profile? This can’t be undone.\n\nIf they have draft history, their name is kept on past results but their login, email and profile are removed.`)) return;
+          const r = await api('DELETE', `/api/users/${u.id}`);
+          toast(r.kept_history ? 'Profile removed — name kept on past results' : 'Profile deleted');
+        } else if (act === 'reset') {
+          const r = await api('POST', `/api/users/${u.id}/reset-link`);
+          modal(`<h2>Password reset link</h2>
+            <p class="small">${r.emailed ? `Emailed to ${esc(u.email)}. You can also send it yourself:` : `Send this to ${esc(u.display_name)} (text, email…). It works once, for ${r.hours} hours.`}</p>
+            <input type="text" readonly value="${esc(r.link)}" id="rl" style="margin-bottom:10px">
+            <div class="row"><button class="btn primary" id="copyRl">Copy link</button><button class="btn" data-close>Close</button></div>`, ($m) => {
+            $m.querySelector('#rl').select();
+            $m.querySelector('#copyRl').onclick = async () => { try { await navigator.clipboard.writeText(r.link); toast('Copied'); } catch { $m.querySelector('#rl').select(); } };
+          });
+          return;
+        }
+        route();
+      } catch (e) { toast(e.message, true); }
+    }));
   }
 
   // ------------------------------------------------------------ home (drafts list)
@@ -192,7 +302,7 @@ const [drafts, users] = await Promise.all([api('GET', '/api/drafts'), api('GET',
       <div class="page">
         <div class="row spread" style="margin-bottom:14px">
           <h1 style="margin:0">Hi, ${esc(state.me.display_name)}</h1>
-          ${isAdmin ? `<div class="row"><a class="btn" href="#/import">Import past draft</a><a class="btn primary" href="#/new">+ New draft</a></div>` : ''}
+          ${isAdmin ? `<a class="btn primary" href="#/new">+ New draft</a>` : ''}
         </div>
         <div class="panel">
           <h2>Current drafts</h2>
@@ -221,10 +331,13 @@ const [drafts, users] = await Promise.all([api('GET', '/api/drafts'), api('GET',
   async function viewNewDraft() {
     if (!state.me.is_admin) { location.hash = '#/'; return; }
         const seq = routeSeq;
-const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/schedules')]);
+const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/schedules'), api('GET', '/api/drafts/next-order')]);
     if (seq !== routeSeq) return;
-    const y = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-    let order = users.map(u => u.id);
+    const users = allUsers.filter(u => u.active);  // inactive partners can't be added to new drafts
+    // Default to the season after the most recent season draft (or the current season if there's none).
+    const prevStart = rot.previous ? parseInt(rot.previous.season, 10) : NaN;
+    const y = Number.isFinite(prevStart) ? prevStart + 1 : (new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1);
+    let order = rot.suggested.filter(id => users.some(u => u.id === id));
     let games = [];
     let kind = 'season';
 
@@ -247,10 +360,15 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
                 <select id="dMode"><option value="live">Live — together, now</option><option value="async">By email — over a few days</option></select></div>
             </div>
             <div class="field"><label>Clock warning after (minutes, 0 = none — never a hard limit)</label><input type="number" id="dWarn" value="2" min="0" step="0.5"></div>
-            <h2 style="margin-top:20px">Partners &amp; order</h2>
+            <h2 style="margin-top:20px">Participating partners</h2>
+            <p class="muted small" style="margin-top:-4px">Untick anyone sitting this draft out. Inactive partners aren’t listed.</p>
             <div class="check-list" id="who"></div>
+            <h2 style="margin-top:16px">Selection order</h2>
+            ${rot.previous ? `<div class="prev-order"><div class="k">Last season · ${esc(rot.previous.season)}</div>
+              ${rot.previous.order.map(o => `<span>${o.position}. ${esc(o.display_name)}</span>`).join('')}
+              <div class="muted small" id="rotNote">Rotated: last season’s final pick moves to first.</div></div>` : ''}
             <ol class="order-list" id="order"></ol>
-            <button class="btn sm" id="shuffle">🎲 Randomize order</button>
+            <div class="row"><button class="btn sm" id="useRot">↻ Use rotation</button><button class="btn sm" id="shuffle">🎲 Randomize</button></div>
           </div>
           <div class="panel">
             <h2>Schedule</h2>
@@ -303,16 +421,20 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
     };
     $('#dMode').onchange = () => { if ($('#dMode').value === 'async') $('#dWarn').value = 0; };
 
+    const rotationFor = ids => [...rot.suggested.filter(id => ids.includes(id)), ...ids.filter(id => !rot.suggested.includes(id))];
     const renderWho = () => {
       $('#who').innerHTML = users.map(u => `<label><input type="checkbox" value="${u.id}" ${order.includes(u.id) ? 'checked' : ''}> ${avatar(u)} ${esc(u.display_name)}</label>`).join('');
       $('#who').querySelectorAll('input').forEach(cb => (cb.onchange = () => {
         const id = Number(cb.value);
-        order = cb.checked ? [...order, id] : order.filter(x => x !== id);
+        // Re-joining partners slot back into their rotation position.
+        order = cb.checked ? rotationFor([...order, id]).filter(x => order.includes(x) || x === id) : order.filter(x => x !== id);
         renderOrder();
       }));
     };
     const renderOrder = () => {
       $('#shuffle').hidden = kind === 'playoff';
+      $('#useRot').hidden = kind === 'playoff' || !rot.previous;
+      const pv = $app.querySelector('.prev-order'); if (pv) pv.hidden = kind === 'playoff';
       if (kind === 'playoff') {
         $('#order').innerHTML = `<li class="muted">🎲 Playoff order is drawn at random by the app when you create the draft — ${order.length} partners.</li>`;
         renderSummary(); return;
@@ -341,13 +463,14 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       games.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
       $('#gCount').textContent = games.length;
       $('#gRows').innerHTML = games.map((g, i) => { const t = team(g.opponent); return `<tr>
-        <td>${fmtGameDate(g)}, ${parseDate(g.date).getFullYear()}</td><td>${fmtTime(g.time)}</td><td>${esc(t.city)} ${esc(t.name)}</td>
+        <td>${fmtGameDate(g)}, ${parseDate(g.date).getFullYear()}</td><td>${fmtTime(g.time)}</td><td class="with-logo">${logo(g.opponent, 'dark', 'xs')}${esc(t.city)} ${esc(t.name)}</td>
         <td>${TYPE_LABEL[g.type]}</td><td>${fmtMoney(g.price)}</td><td>${esc(g.notes)}</td>
         <td><button class="icon-btn" data-rm="${i}" title="Remove">✕</button></td></tr>`; }).join('');
       $('#gRows').querySelectorAll('[data-rm]').forEach(b => (b.onclick = () => { games.splice(+b.dataset.rm, 1); renderGames(); }));
       renderSummary();
     };
     renderWho(); renderOrder();
+    $('#useRot').onclick = () => { order = rotationFor(order); renderOrder(); };
     $('#shuffle').onclick = () => { for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; } renderOrder(); };
     $('#src').onchange = () => { const v = $('#src').value; $('#csvOpts').hidden = v !== 'csv'; $('#sampleOpts').hidden = v !== 'sample'; $('#preview').hidden = v === 'none'; };
     $('#src').onchange();
@@ -392,6 +515,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
     if (seq !== routeSeq) return;
     $app.innerHTML = `
       <div class="page">
+        <p><a href="#/history">← History</a></p>
         <h1>Import past drafts</h1>
         <div class="panel" id="bundled"><p class="muted">Loading bundled history…</p></div>
         <h2>Import a single draft from CSV</h2>
@@ -500,6 +624,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
               <button class="icon-btn" id="pauseBtn" title="Pause / resume clock">❚❚</button>
               <button class="icon-btn" id="undoBtn" title="Undo last pick (commissioner)">↶</button>
               <button class="icon-btn" id="nudgeBtn" title="Email a reminder to whoever is on the clock">✉</button>
+              <button class="icon-btn" id="ctrlBtn" title="Commissioner controls" hidden>⚙</button>
             </div>
             <div><div class="clock" id="clock">00:00</div><div class="clock-sub" id="clockSub">time on the clock</div></div>
           </div>
@@ -554,7 +679,8 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       const d = s.draft;
       clockBase = d.elapsed_ms; clockT0 = performance.now();
       const users = usersOf(s);
-      $('#pauseBtn').disabled = d.status !== 'live';
+      $('#pauseBtn').disabled = d.status !== 'live' || !(state.me.is_admin || s.on_clock?.user_id === state.me.id);
+      $('#ctrlBtn').hidden = !state.me.is_admin || d.source === 'import';
       $('#pauseBtn').textContent = d.paused_at ? '▶' : '❚❚';
       $('#undoBtn').disabled = !state.me.is_admin || !s.picks.length || d.status === 'setup' || d.source === 'import';
       $('#nudgeBtn').disabled = d.status !== 'live';
@@ -578,12 +704,13 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       } else if (d.status === 'setup') {
         html = `<div><div class="name" style="font-family:var(--cond);font-size:2rem;font-weight:800">DRAFT NOT STARTED</div>
           <div class="nextup"><b>Order:</b>${s.order.map(o => `<span>${o.position}. ${esc(o.display_name)}</span>`).join('')}</div>
-          ${state.me.is_admin ? '<button class="btn go" id="startBtn" style="margin-top:8px">Start draft</button>' : ''}</div>`;
+          ${state.me.is_admin ? '<div class="row" style="margin-top:8px"><button class="btn go" id="startBtn">Start draft</button><button class="btn" id="editOrderBtn">Edit partners &amp; order</button></div>' : ''}</div>`;
       } else {
         html = `<div><div class="name" style="font-family:var(--cond);font-size:2.4rem;font-weight:800">DRAFT COMPLETE 🏒</div>
           <div class="row" style="margin-top:6px"><a class="btn primary" href="#/history/${d.id}">View results</a><a class="btn" href="#/trades">Trades</a></div></div>`;
       }
       $('#onclock').innerHTML = html;
+      $('#editOrderBtn')?.addEventListener('click', editOrder);
       $('#startBtn')?.addEventListener('click', async () => {
         try { s = await api('POST', `/api/drafts/${id}/start`); renderAll(); } catch (e) { toast(e.message, true); }
       });
@@ -650,7 +777,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
             const mine = gp.some(p => p.owner_id === state.me.id);
             return `<div class="card taken ${mine ? 'mine' : ''}" style="--who:${esc(users[gp[0].owner_id].color)}">
               <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${t.abbr}</span></div>
-              <div class="opp">${esc(t.name)}</div>
+              <div class="opp">${logo(g.opponent, 'dark', 'sm muted-logo')}<span>${esc(t.name)}</span></div>
               ${gp.map(p => ownerLine(p, users)).join('')}
             </div>`;
           }
@@ -658,12 +785,12 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
           if (s.draft.status === 'complete' && !gp.length) {
             return `<div class="card taken" style="--who:#555" title="${esc(g.notes)}">
               <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${t.abbr}</span></div>
-              <div class="opp">${esc(t.name)}</div><div class="by"><span class="slot" style="margin-left:0">${esc(g.notes || 'not drafted')}</span></div></div>`;
+              <div class="opp">${logo(g.opponent, 'dark', 'sm muted-logo')}<span>${esc(t.name)}</span></div><div class="by"><span class="slot" style="margin-left:0">${esc(g.notes || 'not drafted')}</span></div></div>`;
           }
           return `<button class="card ${t.div} ${selected === g.id ? 'selected' : ''}" data-game="${g.id}">
             <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${fmtTime(g.time)}</span></div>
             <div class="city"><span>${esc(t.city)}</span><span title="Price for the pair">${fmtMoney(g.price)}</span></div>
-            <div class="opp">${esc(t.name)}</div>
+            <div class="opp">${logo(g.opponent, 'light')}<span>${esc(t.name)}</span></div>
             ${g.notes ? `<div class="note">★ ${esc(g.notes)}</div>` : ''}
             ${single && gp.length ? `<div class="seats">${left} seat${left === 1 ? '' : 's'} left</div>${gp.map(p => ownerLine(p, users)).join('')}` : ''}
           </button>`;
@@ -682,7 +809,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       if (!recent.length) { el.className = 'scroll still'; el.innerHTML = '<span>No picks yet — good luck, partners.</span>'; return; }
       el.className = 'scroll';
       el.innerHTML = recent.map(p => { const g = gameMap[p.game_id]; const t = team(g.opponent);
-        return `<span><b>${p.round}.${p.pick_in_round}</b>${esc(users[p.user_id].display_name)} / ${fmtGameDate(g)} vs ${esc(t.name)}${seatLabel(p)}<span class="t">(${fmtDur(p.seconds_taken)})</span></span>`; }).join('');
+        return `<span><b>${p.round}.${p.pick_in_round}</b>${esc(users[p.user_id].display_name)} / ${fmtGameDate(g)} vs ${logo(g.opponent, 'light', 'xs')}${esc(t.name)}${seatLabel(p)}<span class="t">(${fmtDur(p.seconds_taken)})</span></span>`; }).join('');
     }
 
     function renderAll() { renderHeader(); renderBoard(); renderTicker(); }
@@ -706,7 +833,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       const taken = s.picks.filter(p => p.game_id === g.id);
       modal(`
         <div class="muted small">ROUND ${s.on_clock.round} · PICK ${s.on_clock.pick_in_round} · ${behalf ? `ON BEHALF OF ${esc(forUser.display_name.toUpperCase())}` : 'YOUR PICK'}</div>
-        <div class="big">${esc(t.city)} ${esc(t.name)}</div>
+        <div class="big row" style="gap:12px">${logo(g.opponent, 'dark', 'lg')}<span>${esc(t.city)} ${esc(t.name)}</span></div>
         <p>${fmtGameDate(g)} · ${fmtTime(g.time)}${g.price ? ` · ${fmtMoney(g.price)} for the pair${pickSeats(s) ? ` (${fmtMoney(g.price / g.seats)}/seat)` : ''}` : ''}${g.notes ? ` · ${esc(g.notes)}` : ''}</p>
         ${pickSeats(s) ? `<p class="muted">One seat (seat ${taken.length + 1} of ${g.seats})${taken.length ? ` — the other is held by ${esc(usersOf(s)[taken[0].owner_id].display_name)}` : ''}.</p>` : ''}
         <div class="row"><button class="btn go" id="confirmPick">Lock it in</button><button class="btn" data-close>Cancel</button></div>`,
@@ -723,6 +850,62 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       if (!confirm('Undo the last pick? That partner goes back on the clock.')) return;
       try { s = await api('POST', `/api/drafts/${id}/undo`); renderAll(); } catch (e) { toast(e.message, true); }
     };
+    async function control(action, confirmText) {
+      if (confirmText && !confirm(confirmText)) return;
+      try { s = await api('POST', `/api/drafts/${id}/control`, { action }); warnedFor = null; renderAll(); toast('Done'); }
+      catch (e) { toast(e.message, true); }
+    }
+    $('#ctrlBtn').onclick = () => {
+      const d = s.draft, live = d.status === 'live';
+      modal(`
+        <h2>Commissioner controls</h2>
+        <p class="muted small">${esc(d.name)} · ${d.status}${d.paused_at ? ' (paused)' : ''} · ${s.picks.length}/${d.total_picks} picks</p>
+        <div class="ctrl-list">
+          <button class="btn" data-c="pause" ${live ? '' : 'disabled'}>${d.paused_at ? '▶ Resume clock' : '❚❚ Pause clock'}</button>
+          <button class="btn" data-c="reset_clock" ${live ? '' : 'disabled'}>⟲ Restart this pick’s clock <span class="muted">(back to 0:00)</span></button>
+          <button class="btn" data-c="undo" ${s.picks.length && d.status !== 'setup' ? '' : 'disabled'}>↶ Undo last pick</button>
+          <button class="btn danger" data-c="restart" ${d.status !== 'setup' ? '' : 'disabled'}>⏮ Restart draft <span class="muted">(clear all picks, start again at pick 1)</span></button>
+          <button class="btn danger" data-c="reset" ${d.status !== 'setup' ? '' : 'disabled'}>⟳ Reset to setup <span class="muted">(clear picks, edit partners &amp; order)</span></button>
+          <button class="btn" data-c="order" ${d.status === 'setup' ? '' : 'disabled'}>👥 Edit partners &amp; order</button>
+        </div>
+        <div class="row" style="margin-top:12px"><button class="btn" data-close>Close</button></div>`, ($m, close) => {
+        $m.querySelectorAll('[data-c]').forEach(b => (b.onclick = async () => {
+          const c = b.dataset.c; close();
+          const traded = d.status === 'complete' ? ' Any trades made from this draft are deleted too.' : '';
+          if (c === 'pause') $('#pauseBtn').click();
+          else if (c === 'undo') $('#undoBtn').click();
+          else if (c === 'order') editOrder();
+          else if (c === 'reset_clock') control(c);
+          else if (c === 'restart') control(c, `Restart the draft? All ${s.picks.length} picks are cleared and the clock starts again at pick 1.${traded}`);
+          else if (c === 'reset') control(c, `Reset the draft to setup? All ${s.picks.length} picks are cleared and the draft stops until you start it again.${traded}`);
+        }));
+      });
+    };
+    async function editOrder() {
+      const all = (await api('GET', '/api/users')).filter(u => u.active);
+      let order = s.order.map(o => o.user_id).filter(id => all.some(u => u.id === id));
+      const playoff = s.draft.kind === 'playoff';
+      modal(`<h2>Partners &amp; order</h2>
+        <div class="check-list" id="eoWho"></div>
+        ${playoff ? '<p class="muted small">🎲 The playoff order is re-drawn at random when you save.</p>' : '<ol class="order-list" id="eoOrder"></ol>'}
+        <div class="row" style="margin-top:10px"><button class="btn primary" id="eoSave">Save</button><button class="btn" data-close>Cancel</button></div>`, ($m, close) => {
+        const byId = Object.fromEntries(all.map(u => [u.id, u]));
+        const render = () => {
+          $m.querySelector('#eoWho').innerHTML = all.map(u => `<label><input type="checkbox" value="${u.id}" ${order.includes(u.id) ? 'checked' : ''}> ${avatar(u)} ${esc(u.display_name)}</label>`).join('');
+          $m.querySelectorAll('#eoWho input').forEach(cb => (cb.onchange = () => { const v = +cb.value; order = cb.checked ? [...order, v] : order.filter(x => x !== v); render(); }));
+          const ol = $m.querySelector('#eoOrder'); if (!ol) return;
+          ol.innerHTML = order.map((uid, i) => `<li><span class="pos">${i + 1}</span>${avatar(byId[uid])}<span class="name">${esc(byId[uid].display_name)}</span>
+            <button class="icon-btn" data-up="${i}" ${i ? '' : 'disabled'}>▲</button><button class="icon-btn" data-down="${i}" ${i < order.length - 1 ? '' : 'disabled'}>▼</button></li>`).join('');
+          ol.querySelectorAll('[data-up]').forEach(b => (b.onclick = () => { const i = +b.dataset.up; [order[i - 1], order[i]] = [order[i], order[i - 1]]; render(); }));
+          ol.querySelectorAll('[data-down]').forEach(b => (b.onclick = () => { const i = +b.dataset.down; [order[i + 1], order[i]] = [order[i], order[i + 1]]; render(); }));
+        };
+        render();
+        $m.querySelector('#eoSave').onclick = async () => {
+          try { s = await api('PUT', `/api/drafts/${id}/order`, { user_ids: order }); close(); renderAll(); toast('Partners & order saved'); }
+          catch (e) { toast(e.message, true); }
+        };
+      });
+    }
     $('#nudgeBtn').onclick = async () => {
       try { const r = await api('POST', `/api/drafts/${id}/nudge`); toast(r.mail_enabled ? 'Reminder email sent' : 'Email isn’t configured on the server yet — reminder logged only'); }
       catch (e) { toast(e.message, true); }
@@ -773,7 +956,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
     const tot = uid => seasonRows.filter(r => r.user_id === uid).reduce((a, r) => ({ games: a.games + r.games, value: a.value + (r.value || 0), weekend: a.weekend + r.weekend, saturday: a.saturday + r.saturday }), { games: 0, value: 0, weekend: 0, saturday: 0 });
     $app.innerHTML = `
       <div class="page" style="max-width:1200px">
-        <h1>Draft history</h1>
+        <div class="row spread" style="margin-bottom:14px"><h1 style="margin:0">Draft history</h1>${state.me.is_admin ? '<a class="btn primary" href="#/import">Import past drafts</a>' : ''}</div>
         ${partnerIds.length ? `
         <div class="panel">
           <h2>All-time</h2>
@@ -825,7 +1008,7 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
     const cell = p => {
       if (!p) return '<span class="muted">—</span>';
       const g = gameMap[p.game_id]; const t = team(g.opponent);
-      return `<div class="rg-cell card ${t.div}" style="cursor:default"><div class="d">${fmtGameDate(g)}${seatLabel(p)}</div><div class="o">${esc(t.name)}</div><div class="s">#${p.overall}${imported ? '' : ` · ${fmtDur(p.seconds_taken)}`}${g.price ? ` · ${fmtMoney(pickValue(p, g))}` : ''}</div></div>`;
+      return `<div class="rg-cell card ${t.div}" style="cursor:default"><div class="d">${fmtGameDate(g)}${seatLabel(p)}</div><div class="o">${logo(g.opponent, 'light', 'sm')}<span>${esc(t.name)}</span></div><div class="s">#${p.overall}${imported ? '' : ` · ${fmtDur(p.seconds_taken)}`}${g.price ? ` · ${fmtMoney(pickValue(p, g))}` : ''}</div></div>`;
     };
     const stats = uid => {
       const drafted = s.picks.filter(p => p.user_id === uid);
@@ -862,7 +1045,7 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
                 <div class="stat"><div class="v">${fmtDur(st.max)}</div><div class="k">Longest</div></div>`}
               </div>
               <ul class="mini-list">${st.held.slice().sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date)).map(p => { const g = gameMap[p.game_id];
-                return `<li><span>${fmtGameDate(g)} · ${esc(team(g.opponent).name)}${seatLabel(p)}${p.owner_id !== p.user_id ? ` <span class="muted" title="Drafted by ${esc(users[p.user_id].display_name)}">⇄ via trade</span>` : ''}</span><span>${orderKnown ? `#${p.overall}` : ''}${p.seconds_taken != null ? ` · ${fmtDur(p.seconds_taken)}` : ''}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
+                return `<li><span class="with-logo">${logo(g.opponent, 'dark', 'xs')}${fmtGameDate(g)} · ${esc(team(g.opponent).name)}${seatLabel(p)}${p.owner_id !== p.user_id ? ` <span class="muted" title="Drafted by ${esc(users[p.user_id].display_name)}">⇄ via trade</span>` : ''}</span><span>${orderKnown ? `#${p.overall}` : ''}${p.seconds_taken != null ? ` · ${fmtDur(p.seconds_taken)}` : ''}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
             </div>`; }).join('')}
         </div>
         ${accepted.length ? `<p class="muted small">Holdings above include ${accepted.length} completed trade${accepted.length > 1 ? 's' : ''}; the round grid and log show the original draft.</p>` : ''}
@@ -882,7 +1065,7 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
             <thead><tr>${orderKnown ? `<th>#</th>${regular ? '<th>Rd.Pick</th>' : ''}` : ''}<th>Partner</th><th>Game</th>${anyPrice ? '<th>Price</th>' : ''}${s.picks.some(p => p.seconds_taken != null) ? '<th>Time taken</th>' : ''}${imported ? '' : '<th>Picked at</th>'}</tr></thead>
             <tbody>${(orderKnown ? s.picks : s.picks.slice().sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date))).map(p => { const g = gameMap[p.game_id]; const t = team(g.opponent);
               return `<tr>${orderKnown ? `<td>${p.overall}</td>${regular ? `<td>${p.round}.${p.pick_in_round}</td>` : ''}` : ''}<td>${esc(users[p.user_id].display_name)}${p.made_by && p.made_by !== p.user_id ? ' <span class="muted small">(entered by commissioner)</span>' : ''}</td>
-                <td>${fmtGameDate(g)}, ${parseDate(g.date).getFullYear()} · ${g.time ? `${fmtTime(g.time)} · ` : ''}${esc(t.city)} ${esc(t.name)}${seatLabel(p)}${g.notes ? ` <span class="muted small">${esc(g.notes)}</span>` : ''}${g.type !== 'regular' ? ` <span class="tbadge">${g.type === 'preseason' ? 'PRE' : 'PO'}</span>` : ''}</td>
+                <td class="with-logo">${logo(g.opponent, 'dark', 'xs')}${fmtGameDate(g)}, ${parseDate(g.date).getFullYear()} · ${g.time ? `${fmtTime(g.time)} · ` : ''}${esc(t.city)} ${esc(t.name)}${seatLabel(p)}${g.notes ? ` <span class="muted small">${esc(g.notes)}</span>` : ''}${g.type !== 'regular' ? ` <span class="tbadge">${g.type === 'preseason' ? 'PRE' : 'PO'}</span>` : ''}</td>
                 ${anyPrice ? `<td>${fmtMoney(pickValue(p, g))}</td>` : ''}${s.picks.some(x => x.seconds_taken != null) ? `<td>${fmtDur(p.seconds_taken)}</td>` : ''}${imported ? '' : `<td class="muted">${fmtWhen(p.picked_at)}</td>`}</tr>`; }).join('')}</tbody>
           </table></div>
         </div>
@@ -903,7 +1086,7 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
     let draftId = Number(sessionStorage.getItem('tradeDraft')) || tradable[0]?.id;
     if (!tradable.some(d => d.id === draftId)) draftId = tradable[0]?.id;
 
-    const itemList = items => items.map(i => `<li>${esc(gameName(i))}${i.seat ? ` · seat ${i.seat}` : ''}${i.price ? ` <span class="muted">${fmtMoney(i.seat ? i.price / 2 : i.price)}</span>` : ''}</li>`).join('') || '<li class="muted">nothing</li>';
+    const itemList = items => items.map(i => `<li>${logo(i.opponent, 'dark', 'xs')}${esc(gameName(i))}${i.seat ? ` · seat ${i.seat}` : ''}${i.price ? ` <span class="muted">${fmtMoney(i.seat ? i.price / 2 : i.price)}</span>` : ''}</li>`).join('') || '<li class="muted">nothing</li>';
     const tradeCard = t => {
       const from = userMap[t.from_user], to = userMap[t.to_user];
       const incoming = t.to_user === me && t.status === 'pending';
@@ -967,7 +1150,7 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
           const ps = s.picks.filter(p => p.owner_id === owner && gameMap[p.game_id].date >= today)
             .sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date));
           return `<div><h3>${name}</h3><div class="check-list trade-pick">${ps.map(p => { const g = gameMap[p.game_id];
-            return `<label><input type="checkbox" name="${owner === me ? 'give' : 'get'}" value="${p.id}"> ${esc(gameName(g))}${seatLabel(p)} <span class="muted">${fmtMoney(pickValue(p, g))}</span></label>`; }).join('') || '<p class="muted">No upcoming games.</p>'}</div></div>`;
+            return `<label><input type="checkbox" name="${owner === me ? 'give' : 'get'}" value="${p.id}"> ${logo(g.opponent, 'dark', 'xs')}${esc(gameName(g))}${seatLabel(p)} <span class="muted">${fmtMoney(pickValue(p, g))}</span></label>`; }).join('') || '<p class="muted">No upcoming games.</p>'}</div></div>`;
         };
         $('#tSides').innerHTML = list(me, 'You give') + list(other, `${esc(userMap[other]?.display_name)} gives`);
         $('#tSides').onchange = summarize; summarize();
@@ -1059,8 +1242,8 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/logout'); state.me = null; location.hash = '#/login'; };
   window.addEventListener('hashchange', route);
   (async () => {
-    const [{ user, mail_enabled }, teams] = await Promise.all([api('GET', '/api/me'), fetch('/api/teams').then(r => r.json())]);
-    state.me = user; state.mailEnabled = mail_enabled; state.teams = teams; state.teamMap = Object.fromEntries(teams.map(t => [t.abbr, t]));
+    const [{ user, mail_enabled, logo_url }, teams] = await Promise.all([api('GET', '/api/me'), fetch('/api/teams').then(r => r.json())]);
+    state.me = user; state.mailEnabled = mail_enabled; state.logoUrl = logo_url || ''; state.teams = teams; state.teamMap = Object.fromEntries(teams.map(t => [t.abbr, t]));
     route();
   })();
 })();
