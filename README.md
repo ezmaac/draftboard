@@ -37,8 +37,14 @@ The **first account created becomes the commissioner**, who creates, starts and 
 `schedules/*.csv` appear as "official" sources when you create a draft. `TML_2026-2027.csv` (42 home games) is included. Any CSV with a header row containing **Date** and **Team** (or Opponent) works. **Time**, **Type** (`Pre-Season` / `Regular Season` / `Playoffs`), **Price** and **Notes** are optional, and extra columns are ignored. Dates can be `29-Sep-26`, `2026-09-29` or `9/29/2026`. Games can also be added or removed by hand before a draft is created, and the commissioner can add games to an unfinished draft (**+ Game** on the board).
 
 ## Importing past drafts
-**Import past draft** (commissioner) takes one row per pick:
+**Ticket Tracker history (bundled).** `history/` holds every season from the partners' Ticket Tracker workbook (2002-03 to 2026-27), converted by `tools/convert_ticket_tracker.py`. To load it, go to **Import past drafts**, match each spreadsheet name (Q, Abela, Pope) to an account, and import. Each season keeps who got which game, the round-1 order, prices where recorded, the freebie, and games nobody drafted. The exact pick sequence exists only where the sheet recorded it (2026-27, 2021-22, 2019-20, 2002-03); 2026-27 also has pick times derived from its timestamps. To regenerate after editing the workbook:
 
+```bash
+pip install openpyxl
+python3 tools/convert_ticket_tracker.py TicketTracker.xlsx history
+```
+
+**Any other CSV.** The single-draft import takes one row per pick:
 ```
 Pick,Partner,Date,Team,Time,Price,Seconds
 1,Mark,7-Oct-25,Montreal Canadiens,7:00 PM,$404,

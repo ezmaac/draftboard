@@ -1,0 +1,530 @@
+[
+ {
+  "sheet": "2026-2027",
+  "season": "2026-27",
+  "order": [
+   "Q",
+   "Abela",
+   "Pope"
+  ],
+  "counts": {
+   "Q": 14,
+   "Abela": 14,
+   "Pope": 14
+  },
+  "ticket_value": {
+   "Q": 3732,
+   "Abela": 3708,
+   "Pope": 3940
+  },
+  "freebie": null,
+  "pick_order_recorded": true,
+  "report": [],
+  "file": "2026-27.csv",
+  "picks": 42,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2025-2026",
+  "season": "2025-26",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Pope": 14,
+   "Q": 14,
+   "Abela": 13
+  },
+  "ticket_value": {
+   "Abela": 1939,
+   "Pope": 2028,
+   "Q": 1810
+  },
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2025-26.csv",
+  "picks": 41,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2024-2025",
+  "season": "2024-25",
+  "order": [
+   "Pope",
+   "Q",
+   "Abela"
+  ],
+  "counts": {
+   "Pope": 14,
+   "Q": 14,
+   "Abela": 14
+  },
+  "ticket_value": {
+   "Pope": 3162,
+   "Q": 3112,
+   "Abela": 3290
+  },
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2024-25.csv",
+  "picks": 42,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2023-2024",
+  "season": "2023-24",
+  "order": [
+   "Q",
+   "Abela",
+   "Pope"
+  ],
+  "counts": {
+   "Q": 14,
+   "Abela": 14,
+   "Pope": 14
+  },
+  "ticket_value": {
+   "Q": 2624,
+   "Abela": 2914,
+   "Pope": 2742
+  },
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2023-24.csv",
+  "picks": 42,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2022-2023",
+  "season": "2022-23",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Abela": 13,
+   "Pope": 14,
+   "Q": 14
+  },
+  "ticket_value": {
+   "Abela": 2560,
+   "Pope": 2682,
+   "Q": 2312
+  },
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2022-23.csv",
+  "picks": 41,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2021-2022",
+  "season": "2021-22",
+  "order": [
+   "Pope",
+   "Q",
+   "Abela"
+  ],
+  "counts": {
+   "Pope": 13,
+   "Q": 14,
+   "Abela": 14
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": true,
+  "report": [],
+  "file": "2021-22.csv",
+  "picks": 41,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2019-2020",
+  "season": "2019-20",
+  "order": [
+   "Q",
+   "Abela",
+   "Pope"
+  ],
+  "counts": {
+   "Q": 14,
+   "Abela": 14,
+   "Pope": 14
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": true,
+  "report": [],
+  "file": "2019-20.csv",
+  "picks": 42,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2018-2019",
+  "season": "2018-19",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Q": 12,
+   "Pope": 12,
+   "Abela": 13
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [
+   "pick order only partly recorded (2 of 37) \u2014 ignored"
+  ],
+  "file": "2018-19.csv",
+  "picks": 37,
+  "unassigned": 4
+ },
+ {
+  "sheet": "2017-2018",
+  "season": "2017-18",
+  "order": [
+   "Pope",
+   "Q",
+   "Abela"
+  ],
+  "counts": {
+   "Pope": 14,
+   "Abela": 14,
+   "Q": 14
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2017-18.csv",
+  "picks": 42,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2016-2017",
+  "season": "2016-17",
+  "order": [
+   "Q",
+   "Abela",
+   "Pope"
+  ],
+  "counts": {
+   "Abela": 15,
+   "Q": 13,
+   "Pope": 14
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2016-17.csv",
+  "picks": 42,
+  "unassigned": 1
+ },
+ {
+  "sheet": "2015-2016",
+  "season": "2015-16",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Abela": 15,
+   "Q": 14,
+   "Pope": 14
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2015-16.csv",
+  "picks": 43,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2014-2015",
+  "season": "2014-15",
+  "order": [
+   "Pope",
+   "Q",
+   "Abela"
+  ],
+  "counts": {
+   "Abela": 15,
+   "Q": 15,
+   "Pope": 13
+  },
+  "ticket_value": {
+   "Pope": 1168,
+   "Q": 1360,
+   "Abela": 1320
+  },
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2014-15.csv",
+  "picks": 43,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2013-2014",
+  "season": "2013-14",
+  "order": [
+   "Q",
+   "Abela",
+   "Pope"
+  ],
+  "counts": {
+   "Q": 15,
+   "Pope": 15,
+   "Abela": 15
+  },
+  "ticket_value": {
+   "Q": 1144,
+   "Abela": 1148,
+   "Pope": 1128
+  },
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2013-14.csv",
+  "picks": 45,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2013 (Lockout)",
+  "season": "2012-13",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Abela": 8,
+   "Q": 8,
+   "Pope": 8
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [
+   "Abela: sheet says 9 picks, found 8"
+  ],
+  "file": "2012-13.csv",
+  "picks": 24,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2011-2012",
+  "season": "2011-12",
+  "order": [
+   "Pope",
+   "Q",
+   "Abela"
+  ],
+  "counts": {
+   "Abela": 16,
+   "Q": 15,
+   "Pope": 15
+  },
+  "ticket_value": {},
+  "freebie": "Rob Abela (Leaf Blanket)",
+  "pick_order_recorded": false,
+  "report": [
+   "corrected 1 date year(s), e.g. 2011-04-09 -> 2012-04-09"
+  ],
+  "file": "2011-12.csv",
+  "picks": 46,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2010-2011",
+  "season": "2010-11",
+  "order": [
+   "Q",
+   "Abela",
+   "Pope"
+  ],
+  "counts": {
+   "Abela": 15,
+   "Pope": 15,
+   "Q": 15
+  },
+  "ticket_value": {},
+  "freebie": "Rob Abela",
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2010-11.csv",
+  "picks": 45,
+  "unassigned": 1
+ },
+ {
+  "sheet": "2009-2010",
+  "season": "2009-10",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Q": 16,
+   "Pope": 15,
+   "Abela": 15
+  },
+  "ticket_value": {},
+  "freebie": "Mark (Skate bag)",
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2009-10.csv",
+  "picks": 46,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2008-2009 ",
+  "season": "2008-09",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Abela": 15,
+   "Q": 15,
+   "Pope": 15
+  },
+  "ticket_value": {
+   "Pope": 15
+  },
+  "freebie": "Rob Pope",
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2008-09.csv",
+  "picks": 45,
+  "unassigned": 1
+ },
+ {
+  "sheet": "2007-2008",
+  "season": "2007-08",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Q": 15,
+   "Pope": 15,
+   "Abela": 15
+  },
+  "ticket_value": {
+   "Pope": 15
+  },
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2007-08.csv",
+  "picks": 45,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2006-2007",
+  "season": "2006-07",
+  "order": [
+   "Abela",
+   "Pope",
+   "Q"
+  ],
+  "counts": {
+   "Q": 15,
+   "Pope": 15,
+   "Abela": 15
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2006-07.csv",
+  "picks": 45,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2005-2006",
+  "season": "2005-06",
+  "order": [
+   "Q",
+   "Pope",
+   "Abela"
+  ],
+  "counts": {
+   "Pope": 15,
+   "Q": 15,
+   "Abela": 15
+  },
+  "ticket_value": {},
+  "freebie": null,
+  "pick_order_recorded": false,
+  "report": [],
+  "file": "2005-06.csv",
+  "picks": 45,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2003-2004",
+  "season": "2003-04",
+  "order": [
+   "Pope",
+   "Abela",
+   "Q"
+  ],
+  "counts": {
+   "Q": 15,
+   "Pope": 15,
+   "Abela": 15
+  },
+  "ticket_value": {},
+  "freebie": "Q (travel document wallet)",
+  "pick_order_recorded": false,
+  "report": [
+   "row 25: unknown team \"Feb\" on 2004-02-12 \u2014 imported as TBD",
+   "corrected 25 date year(s), e.g. 2003-01-08 -> 2004-01-08"
+  ],
+  "file": "2003-04.csv",
+  "picks": 45,
+  "unassigned": 0
+ },
+ {
+  "sheet": "2002-2003",
+  "season": "2002-03",
+  "order": [
+   "Abela",
+   "Q",
+   "Pope"
+  ],
+  "counts": {
+   "Abela": 17,
+   "Q": 17,
+   "Pope": 11
+  },
+  "ticket_value": {},
+  "freebie": "Pope - Valise,  Abela - Day in Life book",
+  "pick_order_recorded": true,
+  "report": [
+   "order slots per round: Abela, Q, Pope, Q, Abela",
+   "corrected 19 date year(s), e.g. 2002-01-21 -> 2003-01-21",
+   "games are listed in pick order \u2014 using row order as the pick sequence"
+  ],
+  "file": "2002-03.csv",
+  "picks": 45,
+  "unassigned": 0
+ }
+]

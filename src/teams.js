@@ -33,6 +33,13 @@ const TEAMS = [
   ['WPG', 'Winnipeg', 'Jets', 'Central'],
 ].map(([abbr, city, name, div]) => ({ abbr, city, name, div }));
 
+// Former franchises, kept so past seasons import cleanly. Not offered for new games.
+TEAMS.push(
+  { abbr: 'PHX', city: 'Phoenix', name: 'Coyotes', div: 'Pacific', defunct: true },
+  { abbr: 'ARI', city: 'Arizona', name: 'Coyotes', div: 'Central', defunct: true },
+  { abbr: 'ATL', city: 'Atlanta', name: 'Thrashers', div: 'Metropolitan', defunct: true },
+);
+
 const BY_ABBR = Object.fromEntries(TEAMS.map(t => [t.abbr, t]));
 
 const fold = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
@@ -45,7 +52,7 @@ function findTeam(input) {
     fold(t.name) === s ||
     fold(`${t.city} ${t.name}`) === s ||
     fold(t.city) === s
-  ) || TEAMS.find(t => s.endsWith(fold(t.name))) || null;
+  ) || TEAMS.find(t => !t.defunct && s.endsWith(fold(t.name))) || null;
 }
 
 module.exports = { TEAMS, BY_ABBR, findTeam };

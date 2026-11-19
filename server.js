@@ -210,7 +210,7 @@ app.get('/api/drafts', auth, (_req, res) => {
     SELECT d.*, (SELECT COUNT(*) FROM games g WHERE g.draft_id = d.id) AS game_count,
                 (SELECT COALESCE(SUM(seats), 0) FROM games g WHERE g.draft_id = d.id) AS seat_count,
                 (SELECT COUNT(*) FROM picks p WHERE p.draft_id = d.id) AS pick_count
-    FROM drafts d ORDER BY COALESCE(d.started_at, 0) = 0 DESC, d.season DESC, d.id DESC`).all();
+    FROM drafts d ORDER BY d.status = 'complete', d.season DESC, d.id DESC`).all();
   res.json(rows.map(d => {
     const out = { ...d, total_picks: d.seat_mode === 'single' ? d.seat_count : d.game_count };
     if (d.status === 'live') { const s = draftState(d.id); out.on_clock = s.on_clock; out.elapsed_ms = s.draft.elapsed_ms; }
@@ -383,65 +383,152 @@ app.post('/api/drafts/:id/undo', auth, admin, (req, res) => {
 
 // ---------------------------------------------------------------- historical import
 
+const HISTORY_DIR = path.join(__dirname, 'history');
+
 /**
- * Import a past draft from CSV. One row per pick, in pick order. Columns:
- *   partner (username or display name) — required
- *   date, opponent/team — required
- *   pick/overall, round, time, price, type, seconds/time_taken — optional
+ * Import a past draft from CSV. One row per pick. Columns:
+ *   partner (username or display name), date, opponent/team — required
+ *   pick/overall, time, price, type, seconds/time taken, notes — optional
+ * Rows with no partner are games nobody drafted. If no row has a pick number, the
+ * pick sequence is treated as unknown (only who-got-which-game is kept).
+ * `aliases` maps spreadsheet names (e.g. "Q") to user ids; `order` lists round-1 order by name.
+ * Throws HttpError; unmatched partner names come back in err.unmatched.
  */
-app.post('/api/drafts/import', auth, admin, (req, res) => {
-  const { name, season, kind, order_type, csv } = req.body || {};
+function importDraft({ name, season, kind, order_type, csv, order, notes, aliases = {}, userId }) {
   if (!name?.trim()) fail(400, 'Name is required');
-  const parsed = readCsv(csv || '', [['partner', 'player', 'owner', 'name', 'user'], ['date'], ['opponent', 'team', 'opp']]);
+  const parsed = readCsv(csv || '', [['partner', 'player', 'owner', 'name', 'user', 'selector'], ['date'], ['opponent', 'team', 'opp']]);
   if (!parsed) fail(400, 'Need a header row with partner, date and opponent/team columns');
   const { col, rows } = parsed;
-  const iP = col('partner', 'player', 'owner', 'user', 'name'), iD = col('date'), iO = col('opponent', 'team', 'opp'),
-    iN = col('overall', 'pick', '#'), iT = col('time'), iPr = col('price'), iTy = col('type'), iS = col('seconds', 'time taken', 'time_taken', 'duration');
+  const iP = col('partner', 'selector', 'player', 'owner', 'user', 'name'), iD = col('date'), iO = col('opponent', 'team', 'opp'),
+    iN = col('overall', 'pick', '#'), iT = col('time'), iPr = col('price'), iTy = col('type'),
+    iS = col('seconds', 'time taken', 'time_taken', 'duration'), iNo = col('notes', 'note');
   const users = db.prepare('SELECT * FROM users').all();
-  const findUser = s => users.find(u => [u.username, u.display_name].some(x => x.toLowerCase() === String(s).trim().toLowerCase()));
-  const errors = [], picks = [];
-  for (const { line, cells } of rows) {
-    const u = findUser(cells[iP] || '');
-    const team = /^tbd$/i.test(cells[iO] || '') ? { abbr: 'TBD' } : findTeam(cells[iO]);
-    const date = normDate(cells[iD]);
-    if (!u) { errors.push(`Row ${line}: no account matches partner "${cells[iP]}"`); continue; }
-    if (!team) { errors.push(`Row ${line}: unknown opponent "${cells[iO]}"`); continue; }
-    if (!date) { errors.push(`Row ${line}: bad date "${cells[iD]}"`); continue; }
-    picks.push({
-      user: u, date, opponent: team.abbr, overall: iN >= 0 ? Number(cells[iN]) || null : null,
-      time: normTime(iT >= 0 && iT !== iS ? cells[iT] : ''), price: iPr >= 0 ? normPrice(cells[iPr]) : null,
-      type: kind === 'playoff' ? 'playoff' : normType(iTy >= 0 ? cells[iTy] : ''), seconds: iS >= 0 ? normSeconds(cells[iS]) : null,
-    });
-  }
-  if (errors.length) return res.status(400).json({ error: `${errors.length} problem(s) in the file`, errors });
-  if (!picks.length) fail(400, 'No picks found');
-  picks.forEach((p, i) => (p.seq = i));
-  picks.sort((a, b) => (a.overall ?? 1e9) - (b.overall ?? 1e9) || a.seq - b.seq);
-  // Round-1 order = order of first appearance.
-  const orderIds = [...new Set(picks.map(p => p.user.id))];
-  const n = orderIds.length;
+  const aliasKey = Object.fromEntries(Object.entries(aliases).map(([k, v]) => [k.trim().toLowerCase(), Number(v)]));
+  const findUser = s => {
+    const k = String(s).trim().toLowerCase();
+    if (aliasKey[k]) return users.find(u => u.id === aliasKey[k]);
+    return users.find(u => [u.username, u.display_name].some(x => x.toLowerCase() === k));
+  };
+  const errors = [], unmatched = new Set(), picks = [], extras = [];
   const k = kind === 'playoff' ? 'playoff' : 'season';
-  const id = tx(() => {
-    const d = db.prepare(`INSERT INTO drafts (name, season, kind, seat_mode, order_type, status, source, created_by, warn_secs)
-                          VALUES (?, ?, ?, ?, ?, 'complete', 'import', ?, 0)`)
-      .run(name.trim(), (season || '').trim(), k, k === 'playoff' ? 'single' : 'pair', order_type === 'linear' ? 'linear' : 'snake', req.user.id);
+  for (const { line, cells } of rows) {
+    const who = (cells[iP] || '').trim();
+    const opp = cells[iO] || '';
+    const team = /^tbd$/i.test(opp) ? { abbr: 'TBD' } : findTeam(opp);
+    const date = normDate(cells[iD]);
+    if (!team) { errors.push(`Row ${line}: unknown opponent "${opp}"`); continue; }
+    if (!date) { errors.push(`Row ${line}: bad date "${cells[iD]}"`); continue; }
+    const g = {
+      date, opponent: team.abbr, time: iT >= 0 && iT !== iS && cells[iT] ? normTime(cells[iT]) : '', price: iPr >= 0 ? normPrice(cells[iPr]) : null,
+      type: k === 'playoff' ? 'playoff' : normType(iTy >= 0 ? cells[iTy] : ''), notes: iNo >= 0 ? String(cells[iNo] || '').slice(0, 80) : '',
+    };
+    if (!who) { extras.push(g); continue; }
+    const u = findUser(who);
+    if (!u) { unmatched.add(who); continue; }
+    picks.push({ ...g, user: u, overall: iN >= 0 ? Number(cells[iN]) || null : null, seconds: iS >= 0 ? normSeconds(cells[iS]) : null });
+  }
+  if (unmatched.size) { const e = new HttpError(400, `No account for: ${[...unmatched].join(', ')}`); e.unmatched = [...unmatched]; throw e; }
+  if (errors.length) { const e = new HttpError(400, `${errors.length} problem(s) in the file`); e.errors = errors; throw e; }
+  if (!picks.length) fail(400, 'No picks found');
+
+  const recorded = picks.every(p => p.overall);
+  picks.forEach((p, i) => (p.seq = i));
+  picks.sort(recorded ? (a, b) => a.overall - b.overall : (a, b) => a.date.localeCompare(b.date) || a.seq - b.seq);
+  let orderIds = [...new Set(picks.map(p => p.user.id))];
+  if (Array.isArray(order) && order.length) {
+    const named = [...new Set(order.map(n => findUser(n)?.id).filter(Boolean))];
+    orderIds = [...named, ...orderIds.filter(id => !named.includes(id))];
+  }
+  const n = orderIds.length;
+  return tx(() => {
+    const d = db.prepare(`INSERT INTO drafts (name, season, kind, seat_mode, order_type, status, source, created_by, warn_secs, notes, order_recorded)
+                          VALUES (?, ?, ?, ?, ?, 'complete', 'import', ?, 0, ?, ?)`)
+      .run(name.trim(), (season || '').trim(), k, k === 'playoff' ? 'single' : 'pair', order_type === 'linear' ? 'linear' : 'snake', userId,
+        String(notes || '').slice(0, 4000), recorded ? 1 : 0);
     const draftId = Number(d.lastInsertRowid);
     orderIds.forEach((uid, i) => db.prepare('INSERT INTO draft_order (draft_id, position, user_id) VALUES (?, ?, ?)').run(draftId, i + 1, uid));
     const gameIds = new Map(); // date|opp -> { id, seats used }
-    const insG = db.prepare('INSERT INTO games (draft_id, date, time, opponent, type, price) VALUES (?, ?, ?, ?, ?, ?)');
+    const insG = db.prepare('INSERT INTO games (draft_id, date, time, opponent, type, price, notes) VALUES (?, ?, ?, ?, ?, ?, ?)');
     const insP = db.prepare(`INSERT INTO picks (draft_id, overall, round, pick_in_round, user_id, owner_id, game_id, seat, made_by, seconds_taken, picked_at)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`);
     picks.forEach((p, i) => {
-      const key = `${p.date}|${p.opponent}`;
+      const key = `${p.date}|${p.opponent}|${p.time}`;
       let g = gameIds.get(key);
-      if (!g) { g = { id: Number(insG.run(draftId, p.date, p.time, p.opponent, p.type, p.price).lastInsertRowid), used: 0 }; gameIds.set(key, g); }
+      if (!g) { g = { id: Number(insG.run(draftId, p.date, p.time, p.opponent, p.type, p.price, p.notes).lastInsertRowid), used: 0 }; gameIds.set(key, g); }
       g.used++;
       if (k !== 'playoff' && g.used > 1) fail(400, `${p.date} vs ${p.opponent} appears twice — for a season draft each game is one pick`);
       insP.run(draftId, i + 1, Math.floor(i / n) + 1, (i % n) + 1, p.user.id, p.user.id, g.id, k === 'playoff' ? g.used : 0, p.seconds);
     });
-    return draftId;
+    extras.forEach(g => insG.run(draftId, g.date, g.time, g.opponent, g.type, g.price, g.notes));
+    return { id: draftId, picks: picks.length, order_recorded: recorded };
   });
-  res.json({ id, picks: picks.length });
+}
+
+function sendImportError(res, e) {
+  if (!(e instanceof HttpError)) throw e;
+  res.status(e.status).json({ error: e.message, errors: e.errors, unmatched: e.unmatched });
+}
+
+app.post('/api/drafts/import', auth, admin, (req, res) => {
+  try { res.json(importDraft({ ...req.body, userId: req.user.id })); }
+  catch (e) { sendImportError(res, e); }
+});
+
+// Seasons converted from the partners' Ticket Tracker workbook (tools/convert_ticket_tracker.py).
+function bundledManifest() {
+  const f = path.join(HISTORY_DIR, 'manifest.json');
+  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : [];
+}
+
+function manifestNotes(m) {
+  const lines = [];
+  if (!m.pick_order_recorded) lines.push('The pick-by-pick order was not recorded this season — only who got each game.');
+  if (m.freebie) lines.push(`Freebie: ${m.freebie}`);
+  for (const r of m.report || []) if (!/^corrected|row order/.test(r)) lines.push(`Spreadsheet note: ${r}`);
+  lines.push(`Imported from worksheet "${m.sheet.trim()}".`);
+  return lines.join('\n');
+}
+
+app.get('/api/history/bundled', auth, admin, (_req, res) => {
+  const imported = new Set(db.prepare("SELECT season FROM drafts WHERE source = 'import' AND kind = 'season'").all().map(r => r.season));
+  const names = new Set();
+  for (const m of bundledManifest()) m.order.forEach(n => names.add(n));
+  res.json({ seasons: bundledManifest().map(m => ({ ...m, imported: imported.has(m.season) })), partner_names: [...names] });
+});
+
+app.post('/api/history/bundled', auth, admin, (req, res) => {
+  const { seasons = [], aliases = {}, replace = false } = req.body || {};
+  const manifest = bundledManifest();
+  const results = [];
+  for (const season of seasons) {
+    const m = manifest.find(x => x.season === season);
+    if (!m) { results.push({ season, error: 'not in bundled history' }); continue; }
+    const existing = db.prepare("SELECT id FROM drafts WHERE source = 'import' AND kind = 'season' AND season = ?").all(season);
+    if (existing.length && !replace) { results.push({ season, skipped: 'already imported' }); continue; }
+    try {
+      existing.forEach(d => db.prepare('DELETE FROM drafts WHERE id = ?').run(d.id));
+      const csv = fs.readFileSync(path.join(HISTORY_DIR, path.basename(m.file)), 'utf8');
+      const r = importDraft({ name: `${season} Season Draft`, season, kind: 'season', order_type: 'snake', csv, order: m.order, notes: manifestNotes(m), aliases, userId: req.user.id });
+      results.push({ season, ...r });
+    } catch (e) {
+      if (!(e instanceof HttpError)) throw e;
+      if (e.unmatched) return res.status(400).json({ error: e.message, unmatched: e.unmatched });
+      results.push({ season, error: e.message, errors: e.errors });
+    }
+  }
+  broadcast('home');
+  res.json({ results });
+});
+
+// Games and value per partner per season, for the all-time view.
+app.get('/api/history/summary', auth, (_req, res) => {
+  res.json(db.prepare(`
+    SELECT d.id AS draft_id, d.name, d.season, d.kind, d.status, d.source, p.owner_id AS user_id,
+           COUNT(*) AS games, SUM(CASE WHEN p.seat = 0 THEN COALESCE(g.price, 0) * g.seats ELSE COALESCE(g.price, 0) END) AS value,
+           SUM(CASE WHEN strftime('%w', g.date) IN ('0', '5', '6') THEN 1 ELSE 0 END) AS weekend,
+           SUM(CASE WHEN strftime('%w', g.date) = '6' THEN 1 ELSE 0 END) AS saturday
+    FROM picks p JOIN drafts d ON d.id = p.draft_id JOIN games g ON g.id = p.game_id
+    GROUP BY d.id, p.owner_id ORDER BY d.season DESC, d.id DESC`).all());
 });
 
 // ---------------------------------------------------------------- trades

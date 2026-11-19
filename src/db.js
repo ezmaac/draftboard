@@ -114,6 +114,11 @@ CREATE TABLE IF NOT EXISTS trade_items (
   PRIMARY KEY (trade_id, pick_id)
 );
 `);
+// Additive columns (safe on existing databases).
+const draftCols = db.prepare('PRAGMA table_info(drafts)').all().map(c => c.name);
+if (!draftCols.includes('notes')) db.exec("ALTER TABLE drafts ADD COLUMN notes TEXT NOT NULL DEFAULT ''");
+// 0 for imported seasons where only who-got-which-game was recorded, not the pick sequence.
+if (!draftCols.includes('order_recorded')) db.exec('ALTER TABLE drafts ADD COLUMN order_recorded INTEGER NOT NULL DEFAULT 1');
 db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 
 module.exports = db;

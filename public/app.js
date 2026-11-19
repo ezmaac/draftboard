@@ -19,7 +19,7 @@
   const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const TYPE_LABEL = { preseason: 'Preseason', regular: 'Regular season', playoff: 'Playoffs' };
   const parseDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
-  const fmtTime = t => { const [h, m] = t.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+  const fmtTime = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
   const fmtGameDate = g => { const d = parseDate(g.date); return `${DOW[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`; };
   const fmtMoney = n => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
   const fmtDur = secs => {
@@ -45,7 +45,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && !url.startsWith('/api/login')) { state.me = null; location.hash = '#/login'; }
-    if (!res.ok) { const e = new Error(data.error || `Request failed (${res.status})`); e.details = data.errors; throw e; }
+    if (!res.ok) { const e = new Error(data.error || `Request failed (${res.status})`); e.details = data.errors; e.unmatched = data.unmatched; throw e; }
     return data;
   }
 
@@ -199,7 +199,7 @@ const [drafts, users] = await Promise.all([api('GET', '/api/drafts'), api('GET',
         </div>
         <div class="panel">
           <h2>Past drafts</h2>
-          ${done.length ? done.map(item).join('') : `<p class="muted">Completed drafts will be kept here.</p>`}
+          ${done.length ? done.slice(0, 4).map(item).join('') + (done.length > 4 ? `<p><a href="#/history">All ${done.length} past drafts →</a></p>` : '') : `<p class="muted">Completed drafts will be kept here.</p>`}
         </div>
       </div>`;
     $app.querySelectorAll('[data-start]').forEach(b => (b.onclick = async () => {
@@ -215,7 +215,7 @@ const [drafts, users] = await Promise.all([api('GET', '/api/drafts'), api('GET',
   }
 
   // ------------------------------------------------------------ new draft (commissioner)
-  const teamOptions = (sel = '') => `<option value="TBD">TBD</option>${state.teams.map(t => `<option value="${t.abbr}" ${t.abbr === sel ? 'selected' : ''}>${esc(t.city)} ${esc(t.name)}</option>`).join('')}`;
+  const teamOptions = (sel = '') => `<option value="TBD">TBD</option>${state.teams.filter(t => !t.defunct).map(t => `<option value="${t.abbr}" ${t.abbr === sel ? 'selected' : ''}>${esc(t.city)} ${esc(t.name)}</option>`).join('')}`;
 
   async function viewNewDraft() {
     if (!state.me.is_admin) { location.hash = '#/'; return; }
@@ -385,7 +385,9 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
     if (seq !== routeSeq) return;
     $app.innerHTML = `
       <div class="page">
-        <h1>Import a past draft</h1>
+        <h1>Import past drafts</h1>
+        <div class="panel" id="bundled"><p class="muted">Loading bundled history…</p></div>
+        <h2>Import a single draft from CSV</h2>
         <div class="grid2">
           <div class="panel">
             <div class="field"><label>Draft type</label><select id="iKind"><option value="season">Season</option><option value="playoff">Playoffs (single seats)</option></select></div>
@@ -410,6 +412,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
         </div>
       </div>`;
     const $ = s => $app.querySelector(s);
+    renderBundled(users);
     $('#iSeason').oninput = () => { $('#iName').value = `${$('#iSeason').value} ${$('#iKind').value === 'playoff' ? 'Playoff' : 'Season'} Draft`; };
     $('#iFile').onchange = async e => { const f = e.target.files[0]; if (f) $('#iCsv').value = await f.text(); };
     $('#iGo').onclick = async () => {
@@ -417,7 +420,53 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
       try {
         const r = await api('POST', '/api/drafts/import', { name: $('#iName').value, season: $('#iSeason').value, kind: $('#iKind').value, order_type: $('#iType').value, csv: $('#iCsv').value });
         toast(`Imported ${r.picks} picks`); location.hash = `#/history/${r.id}`;
-      } catch (e) { $('#iErr').innerHTML = esc(e.message) + (e.details ? '<br>' + e.details.slice(0, 10).map(esc).join('<br>') : ''); }
+      } catch (e) { $('#iErr').innerHTML = esc(e.message) + (e.details ? '<br>' + e.details.slice(0, 10).map(esc).join('<br>') : '') + (e.unmatched ? '<br>Partner names must match a username or display name.' : ''); }
+    };
+  }
+
+  async function renderBundled(users) {
+    const el = $app.querySelector('#bundled');
+    let data;
+    try { data = await api('GET', '/api/history/bundled'); } catch (e) { el.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
+    if (!data.seasons.length) { el.innerHTML = '<p class="muted">No bundled history found (history/manifest.json).</p>'; return; }
+    const guess = n => users.find(u => [u.username, u.display_name].some(x => x.toLowerCase() === n.toLowerCase()))?.id || '';
+    el.innerHTML = `
+      <h2>Ticket Tracker history</h2>
+      <p class="small muted">${data.seasons.length} seasons converted from your workbook. Match each spreadsheet name to a partner’s account, choose seasons, and import.</p>
+      <div class="row" style="margin-bottom:12px">${data.partner_names.map(n => `
+        <div class="field" style="min-width:180px"><label>“${esc(n)}” is…</label>
+          <select data-alias="${esc(n)}"><option value="">— choose account —</option>${users.map(u => `<option value="${u.id}" ${guess(n) === u.id ? 'selected' : ''}>${esc(u.display_name)} (@${esc(u.username)})</option>`).join('')}</select></div>`).join('')}</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th><input type="checkbox" id="bAll" checked></th><th>Season</th><th>Games</th><th>Order (round 1)</th><th>Pick sequence</th><th>Notes</th><th></th></tr></thead>
+        <tbody>${data.seasons.map(m => `<tr>
+          <td><input type="checkbox" data-season="${esc(m.season)}" ${m.imported ? '' : 'checked'}></td>
+          <td><b>${esc(m.season)}</b></td><td>${m.picks}${m.unassigned ? ` <span class="muted">+${m.unassigned} not drafted</span>` : ''}</td>
+          <td>${m.order.map(esc).join(' → ')}</td><td>${m.pick_order_recorded ? '✓ recorded' : '<span class="muted">not recorded</span>'}</td>
+          <td class="small muted">${[m.freebie ? `Freebie: ${esc(m.freebie)}` : '', ...(m.report || []).map(esc)].filter(Boolean).join('<br>')}</td>
+          <td>${m.imported ? '<span class="pill complete">imported</span>' : ''}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="bGo">Import selected</button>
+        <label class="toggle" style="display:flex;gap:6px;margin:0;color:var(--text)"><input type="checkbox" id="bReplace"> Re-import seasons already imported</label>
+        <span class="error" id="bErr"></span></div>`;
+    const q = sel => el.querySelector(sel);
+    q('#bAll').onchange = () => el.querySelectorAll('[data-season]').forEach(c => (c.checked = q('#bAll').checked));
+    q('#bGo').onclick = async () => {
+      const aliases = {};
+      for (const sel of el.querySelectorAll('[data-alias]')) {
+        if (!sel.value) { q('#bErr').textContent = `Choose an account for “${sel.dataset.alias}” (partners need to sign up first).`; return; }
+        aliases[sel.dataset.alias] = Number(sel.value);
+      }
+      const seasons = [...el.querySelectorAll('[data-season]:checked')].map(c => c.dataset.season);
+      if (!seasons.length) { q('#bErr').textContent = 'Pick at least one season.'; return; }
+      q('#bGo').disabled = true; q('#bErr').textContent = '';
+      try {
+        const r = await api('POST', '/api/history/bundled', { seasons, aliases, replace: q('#bReplace').checked });
+        const ok = r.results.filter(x => x.id).length, skipped = r.results.filter(x => x.skipped).length, bad = r.results.filter(x => x.error);
+        toast(`Imported ${ok} season${ok === 1 ? '' : 's'}${skipped ? `, skipped ${skipped} already imported` : ''}`, !!bad.length);
+        if (bad.length) q('#bErr').innerHTML = bad.map(b => `${esc(b.season)}: ${esc(b.error)}`).join('<br>');
+        else location.hash = '#/history';
+      } catch (e) { q('#bErr').textContent = e.message; }
+      q('#bGo').disabled = false;
     };
   }
 
@@ -454,7 +503,7 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
           <div class="sb-cell onclock" id="onclock"></div>
         </div>
         <div class="toolbar">
-          <select id="fTeam"><option value="">All opponents</option>${state.teams.map(t => `<option value="${t.abbr}">${esc(t.city)} ${esc(t.name)}</option>`).join('')}</select>
+          <select id="fTeam"><option value="">All opponents</option>${[...new Set(s.games.map(g => g.opponent))].map(team).sort((a, b) => (a.city + a.name).localeCompare(b.city + b.name)).map(t => `<option value="${t.abbr}">${esc(t.city)} ${esc(t.name)}</option>`).join('')}</select>
           <select id="fType" hidden><option value="">All game types</option><option value="preseason">Preseason</option><option value="regular">Regular season</option><option value="playoff">Playoffs</option></select>
           <div class="dow-chips" id="fDow">${DOW.map((d, i) => `<button data-dow="${i}" title="${d}">${d}</button>`).join('')}</div>
           <label class="toggle"><input type="checkbox" id="fHide"> Available only</label>
@@ -599,6 +648,11 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
             </div>`;
           }
           const left = single ? g.seats - gp.length : 0;
+          if (s.draft.status === 'complete' && !gp.length) {
+            return `<div class="card taken" style="--who:#555" title="${esc(g.notes)}">
+              <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${t.abbr}</span></div>
+              <div class="opp">${esc(t.name)}</div><div class="by"><span class="slot" style="margin-left:0">${esc(g.notes || 'not drafted')}</span></div></div>`;
+          }
           return `<button class="card ${t.div} ${selected === g.id ? 'selected' : ''}" data-game="${g.id}">
             <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${fmtTime(g.time)}</span></div>
             <div class="city"><span>${esc(t.city)}</span><span>${fmtMoney(g.price)}</span></div>
@@ -700,16 +754,45 @@ const [users, files] = await Promise.all([api('GET', '/api/users'), api('GET', '
   // ------------------------------------------------------------ history
   async function viewHistoryIndex() {
     const seq = routeSeq;
-    const drafts = (await api('GET', '/api/drafts')).filter(d => d.status === 'complete' || d.pick_count > 0);
+    const [drafts, summary, users] = await Promise.all([api('GET', '/api/drafts'), api('GET', '/api/history/summary'), api('GET', '/api/users')]);
     if (seq !== routeSeq) return;
+    const list = drafts.filter(d => d.status === 'complete' || d.pick_count > 0)
+      .sort((a, b) => b.season.localeCompare(a.season) || b.id - a.id);
+    const userMap = Object.fromEntries(users.map(u => [u.id, u]));
+    const seasonRows = summary.filter(r => r.kind === 'season' && r.status === 'complete');
+    const partnerIds = [...new Set(seasonRows.map(r => r.user_id))].sort((a, b) => (userMap[a]?.display_name || '').localeCompare(userMap[b]?.display_name || ''));
+    const seasons = [...new Set(seasonRows.map(r => r.draft_id))];
+    const cellOf = (draftId, uid) => seasonRows.find(r => r.draft_id === draftId && r.user_id === uid);
+    const tot = uid => seasonRows.filter(r => r.user_id === uid).reduce((a, r) => ({ games: a.games + r.games, value: a.value + (r.value || 0), weekend: a.weekend + r.weekend, saturday: a.saturday + r.saturday }), { games: 0, value: 0, weekend: 0, saturday: 0 });
     $app.innerHTML = `
-      <div class="page">
+      <div class="page" style="max-width:1200px">
         <h1>Draft history</h1>
+        ${partnerIds.length ? `
         <div class="panel">
-          ${drafts.length ? drafts.map(d => `
+          <h2>All-time</h2>
+          <div class="grid2" style="margin-bottom:14px">${partnerIds.map(uid => { const t = tot(uid); return `
+            <div class="row" style="gap:12px">${avatar(userMap[uid], 'lg')}<div>
+              <div style="font-family:var(--cond);font-size:1.4rem;font-weight:800">${esc(userMap[uid]?.display_name)}</div>
+              <div class="stat-row" style="margin:2px 0 0">
+                <div class="stat"><div class="v">${t.games}</div><div class="k">Games</div></div>
+                <div class="stat"><div class="v">${t.saturday}</div><div class="k">Saturdays</div></div>
+                <div class="stat"><div class="v">${t.weekend}</div><div class="k">Fri–Sun</div></div>
+              </div></div></div>`; }).join('')}</div>
+          <div class="table-wrap"><table class="season-table">
+            <thead><tr><th>Season</th>${partnerIds.map(uid => `<th>${esc(userMap[uid]?.display_name)}</th>`).join('')}<th></th></tr></thead>
+            <tbody>${seasons.map(id => { const d = drafts.find(x => x.id === id); return `<tr>
+              <td><a href="#/history/${id}">${esc(d?.season || d?.name)}</a></td>
+              ${partnerIds.map(uid => { const c = cellOf(id, uid); return `<td>${c ? `${c.games}${c.value ? ` <span class="muted">· ${fmtMoney(c.value)}</span>` : ''}` : '—'}</td>`; }).join('')}
+              <td class="muted small">${d && !d.order_recorded ? 'order not recorded' : ''}</td></tr>`; }).join('')}</tbody>
+          </table></div>
+          <p class="muted small">Games held at the end of each season draft (after trades), with ticket value where prices were recorded.</p>
+        </div>` : ''}
+        <div class="panel">
+          <h2>All drafts</h2>
+          ${list.length ? list.map(d => `
             <div class="draft-item">
               <div><div class="title">${esc(d.name)} <span class="pill ${d.status}">${d.status}</span>${d.source === 'import' ? ' <span class="pill setup">imported</span>' : ''}</div>
-              <div class="muted small">${esc(d.season)} · ${d.kind === 'playoff' ? 'playoffs' : 'season'} · ${d.pick_count}/${d.total_picks} picks${d.completed_at ? ` · finished ${fmtWhen(d.completed_at)}` : ''}</div></div>
+              <div class="muted small">${esc(d.season)} · ${d.kind === 'playoff' ? 'playoffs' : 'season'} · ${d.pick_count} picks${d.completed_at ? ` · finished ${fmtWhen(d.completed_at)}` : ''}</div></div>
               <a class="btn primary" href="#/history/${d.id}">View results</a>
             </div>`).join('') : '<p class="muted">No drafts with picks yet.</p>'}
         </div>
@@ -726,6 +809,10 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
     const rounds = Math.max(0, ...s.picks.map(p => p.round));
     const pickAt = (r, uid) => s.picks.find(p => p.round === r && p.user_id === uid);
     const imported = d.source === 'import';
+    const orderKnown = d.order_recorded !== 0;
+    // The round grid only makes sense when each partner has at most one pick per round.
+    const regular = orderKnown && new Set(s.picks.map(p => `${p.round}|${p.user_id}`)).size === s.picks.length;
+    const undrafted = s.games.filter(g => !s.picks.some(p => p.game_id === g.id));
     const anyPrice = s.games.some(g => g.price);
     const accepted = trades.filter(t => t.status === 'accepted');
     const cell = p => {
@@ -750,6 +837,7 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
         <p class="muted">${esc(d.season)} · <span class="pill ${d.status}">${d.status}</span> · ${d.kind === 'playoff' ? 'playoffs, single seats' : 'season, pairs'} · ${d.order_type} order ·
           ${imported ? 'imported from spreadsheet' : d.started_at ? `started ${fmtWhen(d.started_at)}` : 'not started'}${duration ? ` · took ${fmtDur(duration)}` : ''}</p>
 
+        ${d.notes ? `<div class="panel small" style="white-space:pre-line">${esc(d.notes)}</div>` : ''}
         <div class="panel">
           <h2>Draft order</h2>
           <div class="row">${s.order.map(o => `<div class="row" style="gap:8px"><b style="font-family:var(--cond);font-size:1.6rem;color:var(--clock)">${o.position}</b>${avatar(users[o.user_id])}<span>${esc(o.display_name)}</span></div>`).join('<span class="muted">→</span>')}</div>
@@ -763,34 +851,35 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
                 <div class="stat"><div class="v">${st.count}</div><div class="k">${pickSeats(s) ? 'Seats' : 'Games'}</div></div>
                 <div class="stat"><div class="v">${st.weekend}</div><div class="k">Fri–Sun</div></div>
                 ${anyPrice ? `<div class="stat"><div class="v">${fmtMoney(st.value)}</div><div class="k">Value</div></div>` : ''}
-                ${imported ? '' : `<div class="stat"><div class="v">${fmtDur(st.avg)}</div><div class="k">Avg pick</div></div>
+                ${st.avg == null ? '' : `<div class="stat"><div class="v">${fmtDur(st.avg)}</div><div class="k">Avg pick</div></div>
                 <div class="stat"><div class="v">${fmtDur(st.max)}</div><div class="k">Longest</div></div>`}
               </div>
               <ul class="mini-list">${st.held.slice().sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date)).map(p => { const g = gameMap[p.game_id];
-                return `<li><span>${fmtGameDate(g)} · ${esc(team(g.opponent).name)}${seatLabel(p)}${p.owner_id !== p.user_id ? ` <span class="muted" title="Drafted by ${esc(users[p.user_id].display_name)}">⇄ via trade</span>` : ''}</span><span>R${p.round}${imported ? '' : ` · ${fmtDur(p.seconds_taken)}`}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
+                return `<li><span>${fmtGameDate(g)} · ${esc(team(g.opponent).name)}${seatLabel(p)}${p.owner_id !== p.user_id ? ` <span class="muted" title="Drafted by ${esc(users[p.user_id].display_name)}">⇄ via trade</span>` : ''}</span><span>${orderKnown ? `#${p.overall}` : ''}${p.seconds_taken != null ? ` · ${fmtDur(p.seconds_taken)}` : ''}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
             </div>`; }).join('')}
         </div>
         ${accepted.length ? `<p class="muted small">Holdings above include ${accepted.length} completed trade${accepted.length > 1 ? 's' : ''}; the round grid and log show the original draft.</p>` : ''}
 
-        <div class="panel">
+        ${regular ? `<div class="panel">
           <h2>Results by round</h2>
           <div class="table-wrap"><table class="results-grid">
             <thead><tr><th class="rnd">Rd</th>${s.order.map(o => `<th>${esc(o.display_name)}</th>`).join('')}</tr></thead>
             <tbody>${Array.from({ length: rounds }, (_, i) => `<tr><td class="rnd">${i + 1}</td>${s.order.map(o => `<td>${cell(pickAt(i + 1, o.user_id))}</td>`).join('')}</tr>`).join('')
               || `<tr><td colspan="${s.order.length + 1}" class="muted">No picks yet</td></tr>`}</tbody>
           </table></div>
-        </div>
+        </div>` : ''}
 
         <div class="panel">
-          <h2>Pick log</h2>
+          <h2>${orderKnown ? 'Pick log' : 'Games by date'}</h2>
           <div class="table-wrap"><table>
-            <thead><tr><th>#</th><th>Rd.Pick</th><th>Partner</th><th>Game</th>${anyPrice ? '<th>Price</th>' : ''}${imported ? '' : '<th>Time taken</th><th>Picked at</th>'}</tr></thead>
-            <tbody>${s.picks.map(p => { const g = gameMap[p.game_id]; const t = team(g.opponent);
-              return `<tr><td>${p.overall}</td><td>${p.round}.${p.pick_in_round}</td><td>${esc(users[p.user_id].display_name)}${p.made_by && p.made_by !== p.user_id ? ' <span class="muted small">(entered by commissioner)</span>' : ''}</td>
-                <td>${fmtGameDate(g)} · ${fmtTime(g.time)} · ${esc(t.city)} ${esc(t.name)}${seatLabel(p)}${g.type !== 'regular' ? ` <span class="tbadge">${g.type === 'preseason' ? 'PRE' : 'PO'}</span>` : ''}</td>
-                ${anyPrice ? `<td>${fmtMoney(pickValue(p, g))}</td>` : ''}${imported ? '' : `<td>${fmtDur(p.seconds_taken)}</td><td class="muted">${fmtWhen(p.picked_at)}</td>`}</tr>`; }).join('')}</tbody>
+            <thead><tr>${orderKnown ? `<th>#</th>${regular ? '<th>Rd.Pick</th>' : ''}` : ''}<th>Partner</th><th>Game</th>${anyPrice ? '<th>Price</th>' : ''}${s.picks.some(p => p.seconds_taken != null) ? '<th>Time taken</th>' : ''}${imported ? '' : '<th>Picked at</th>'}</tr></thead>
+            <tbody>${(orderKnown ? s.picks : s.picks.slice().sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date))).map(p => { const g = gameMap[p.game_id]; const t = team(g.opponent);
+              return `<tr>${orderKnown ? `<td>${p.overall}</td>${regular ? `<td>${p.round}.${p.pick_in_round}</td>` : ''}` : ''}<td>${esc(users[p.user_id].display_name)}${p.made_by && p.made_by !== p.user_id ? ' <span class="muted small">(entered by commissioner)</span>' : ''}</td>
+                <td>${fmtGameDate(g)}, ${parseDate(g.date).getFullYear()} · ${g.time ? `${fmtTime(g.time)} · ` : ''}${esc(t.city)} ${esc(t.name)}${seatLabel(p)}${g.notes ? ` <span class="muted small">${esc(g.notes)}</span>` : ''}${g.type !== 'regular' ? ` <span class="tbadge">${g.type === 'preseason' ? 'PRE' : 'PO'}</span>` : ''}</td>
+                ${anyPrice ? `<td>${fmtMoney(pickValue(p, g))}</td>` : ''}${s.picks.some(x => x.seconds_taken != null) ? `<td>${fmtDur(p.seconds_taken)}</td>` : ''}${imported ? '' : `<td class="muted">${fmtWhen(p.picked_at)}</td>`}</tr>`; }).join('')}</tbody>
           </table></div>
         </div>
+        ${undrafted.length && d.status === 'complete' ? `<div class="panel"><h2>Not drafted</h2><ul class="mini-list">${undrafted.map(g => `<li><span>${esc(gameName(g))}</span><span>${esc(g.notes)}</span></li>`).join('')}</ul></div>` : ''}
       </div>`;
   }
 
