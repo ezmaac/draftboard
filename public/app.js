@@ -121,6 +121,8 @@
     if (!opts.any && !opts.public && !state.me) { location.hash = '#/login'; return; }
     if (opts.public && state.me) { location.hash = '#/'; return; }
     $nav.hidden = !state.me || !!opts.any;
+    $nav.classList.remove('menu-open'); menuBtn.textContent = '☰';
+    document.body.classList.toggle('on-board', view === viewBoard);
     document.getElementById('navPartners').hidden = !state.me?.is_admin;
     document.querySelectorAll('[data-nav]').forEach(a => {
       const n = a.dataset.nav;
@@ -687,6 +689,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
 
     $app.innerHTML = `
       <div class="board-page">
+        <div class="board-top" id="boardTop">
         <div class="scoreboard">
           <div class="sb-cell">
             <div class="clock-ctrls">
@@ -702,15 +705,21 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
             <div class="rp"><div class="n" id="pk">–</div><div class="l">Pick</div></div>
           </div>
           <div class="sb-cell onclock" id="onclock"></div>
+          <button class="icon-btn phone-only more-btn" id="moreBtn" aria-label="More actions">⋯</button>
         </div>
+        <div class="phone-line phone-only" id="phoneLine"></div>
         <div class="toolbar">
+          <input type="text" class="search" id="fQ" placeholder="🔍  Search team, date, note…">
+          <button class="btn sm phone-only" id="filterBtn">Filters <span class="badge" id="filterCount" hidden></span></button>
+          <div class="filter-group" id="filterGroup">
           <select id="fTeam"><option value="">All opponents</option>${[...new Set(s.games.map(g => g.opponent))].map(team).sort((a, b) => (a.city + a.name).localeCompare(b.city + b.name)).map(t => `<option value="${t.abbr}">${esc(t.city)} ${esc(t.name)}</option>`).join('')}</select>
           <select id="fType" hidden><option value="">All game types</option><option value="preseason">Preseason</option><option value="regular">Regular season</option><option value="playoff">Playoffs</option></select>
           <div class="dow-chips" id="fDow">${DOW.map((d, i) => `<button data-dow="${i}" title="${d}">${d}</button>`).join('')}</div>
           <div class="dow-chips show-chips" id="fShow" title="Show games that match any selected option">
             <span class="k">Show</span><button data-show="avail">Available</button><button data-show="mine">My games</button><button data-show="others">Taken by others</button></div>
-          <input type="text" class="search" id="fQ" placeholder="🔍  Search team, date, note…">
-          <button class="btn sm" id="fClear">Clear</button>
+          <div class="row phone-only" style="width:100%;justify-content:space-between"><button class="btn sm" id="fClear2">Clear all</button><button class="btn primary sm" id="filterDone">Done</button></div>
+          <button class="btn sm desktop-only" id="fClear">Clear</button>
+          </div>
           <span class="spacer"></span>
           <button class="btn sm" id="addGameBtn" hidden>Games…</button>
           <button class="btn go" id="draftBtn" disabled>Draft game</button>
@@ -718,6 +727,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         <div class="banner"><span id="banner"></span>
           <div class="presence" id="presence"></div>
           <div class="legend" style="justify-content:center;margin-top:2px"><span><i style="background:var(--atl)"></i>Atlantic</span><span><i style="background:var(--met)"></i>Metropolitan</span><span><i style="background:var(--cen)"></i>Central</span><span><i style="background:var(--pac)"></i>Pacific</span></div></div>
+        </div>
         <div class="board" id="board"></div>
         <div class="ticker"><div class="tag">🍁 PICKS</div><div class="track"><div class="scroll" id="ticker"></div></div></div>
       </div>`;
@@ -744,6 +754,22 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       const d = +b.dataset.dow;
       f.dows = f.dows.includes(d) ? f.dows.filter(x => x !== d) : [...f.dows, d];
       saveFilters(); syncDow(); renderBoard();
+    };
+    $('#filterBtn').onclick = () => $('.toolbar').classList.toggle('filters-open');
+    $('#filterDone').onclick = () => $('.toolbar').classList.remove('filters-open');
+    $('#fClear2').onclick = () => $('#fClear').click();
+    $('#moreBtn').onclick = () => {
+      const d = s.draft;
+      const canPause = d.status === 'live' && (state.me.is_admin || s.on_clock?.user_id === state.me.id);
+      modal(`<h2>Draft actions</h2><div class="ctrl-list">
+        ${canPause ? `<button class="btn" data-m="pauseBtn">${d.paused_at ? '▶ Resume clock' : '❚❚ Pause clock'}</button>` : ''}
+        ${d.status === 'live' ? '<button class="btn" data-m="nudgeBtn">✉ Email a reminder to whoever is on the clock</button>' : ''}
+        ${state.me.is_admin && d.source !== 'import' ? '<button class="btn" data-m="ctrlBtn">⚙ Commissioner controls</button>' : ''}
+        ${state.me.is_admin && d.status !== 'complete' ? '<button class="btn" data-m="addGameBtn">📅 Games…</button>' : ''}
+        <a class="btn" href="#/history/${d.id}">📊 Results so far</a>
+        </div><div class="row" style="margin-top:12px"><button class="btn" data-close>Close</button></div>`, ($m, close) => {
+        $m.querySelectorAll('[data-m]').forEach(b => (b.onclick = () => { close(); $('#' + b.dataset.m).click(); }));
+      });
     };
     $('#fClear').onclick = () => {
       Object.assign(f, { team: '', dows: [], type: '', show: [], q: '' }); saveFilters();
@@ -841,7 +867,13 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       return `<div class="by" style="--who:${esc(u.color)}"><span class="dot"></span>${esc(u.display_name)}${traded ? ` <span class="slot" title="Drafted by ${esc(drafter.display_name)}">⇄</span>` : ''}${p.seat ? `<span class="slot">S${p.seat}</span>` : ''}<span class="slot">${p.round}.${p.pick_in_round}</span></div>`;
     }
 
+    function updateFilterCount() {
+      const n = (f.team ? 1 : 0) + (f.type ? 1 : 0) + f.dows.length + f.show.length;
+      $('#filterCount').textContent = n; $('#filterCount').hidden = !n;
+    }
+
     function renderBoard() {
+      updateFilterCount();
       const picksByGame = {};
       s.picks.forEach(p => (picksByGame[p.game_id] ||= []).push(p));
       const users = usersOf(s);
@@ -887,7 +919,9 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       }).join('') || '<p class="muted" style="padding:16px">No games in this draft yet.</p>';
       $('#draftBtn').disabled = !(selected && myTurn());
       const selG = s.games.find(g => g.id === selected);
-      $('#draftBtn').textContent = myTurn() && s.on_clock.user_id !== state.me.id ? `Draft for ${users[s.on_clock.user_id].display_name}` : selG?.single ? 'Draft seat' : 'Draft game';
+      const label = myTurn() && s.on_clock.user_id !== state.me.id ? `Draft for ${users[s.on_clock.user_id].display_name}` : selG?.single ? 'Draft seat' : 'Draft game';
+      // On phones the button floats at the bottom, so it names the game you tapped.
+      $('#draftBtn').innerHTML = `${esc(label)}${selG ? `<span class="phone-only"> · ${esc(fmtGameDate(selG))} ${esc(team(selG.opponent).name)}</span>` : ''}`;
     }
 
     function renderTicker() {
@@ -901,7 +935,10 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         return `<span><b>${p.round}.${p.pick_in_round}</b>${esc(users[p.user_id].display_name)} / ${fmtGameDate(g)} vs ${logo(g.opponent, 'light', 'xs')}${esc(t.name)}${seatLabel(p)}<span class="t">(${fmtDur(p.seconds_taken)})</span></span>`; }).join('');
     }
 
-    function renderAll() { renderHeader(); renderBoard(); renderTicker(); }
+    function renderAll() { renderHeader(); renderBoard(); renderTicker(); setStick(); }
+    // Month/round headings stick just below the board's sticky header on phones.
+    function setStick() { const h = $('#boardTop')?.offsetHeight || 0; document.documentElement.style.setProperty('--board-top', `${h}px`); }
+    window.addEventListener('resize', setStick);
     renderAll();
 
     // interactions
@@ -1051,6 +1088,9 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       const ids = s.order.map(o => o.user_id);
       const users = usersOf(s);
       const watchers = online.filter(uid => !ids.includes(uid));
+      const line = $('#phoneLine');
+      if (line) line.innerHTML = `${s.on_clock && s.upcoming.length ? `<span class="nx"><b>Next:</b> ${s.upcoming.slice(0, 3).map(p => esc(users[p.user_id].display_name)).join(' · ')}</span>` : `<span class="nx">${esc(s.draft.name)} · ${s.picks.length}/${s.draft.total_picks}</span>`}
+        <span class="dots">${s.order.map(o => `<span class="who ${online.includes(o.user_id) ? 'on' : 'off'}" title="${esc(o.display_name)}${online.includes(o.user_id) ? ' is on the board' : ' is away'}">${avatar(users[o.user_id], 'xs')}</span>`).join('')}</span>`;
       el.innerHTML = `<span class="k">In the draft room</span>${s.order.map(o => {
         const on = online.includes(o.user_id);
         return `<span class="who ${on ? 'on' : 'off'}" title="${on ? 'Has the board open' : 'Not on the board right now'}">${avatar(users[o.user_id], 'xs')}${esc(o.display_name)}</span>`; }).join('')}${watchers.length ? `<span class="muted small">+${watchers.length} watching</span>` : ''}`;
@@ -1067,7 +1107,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     const timer = setInterval(tickClock, 250);
     const onKey = e => { if (e.key === 'Escape' && selected) { selected = null; renderBoard(); } };
     document.addEventListener('keydown', onKey);
-    own(seq, () => { stop(); clearInterval(timer); document.removeEventListener('keydown', onKey); });
+    own(seq, () => { stop(); clearInterval(timer); document.removeEventListener('keydown', onKey); window.removeEventListener('resize', setStick); });
   }
 
   // ------------------------------------------------------------ history
@@ -1368,6 +1408,9 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
   }
 
   // ------------------------------------------------------------ boot
+  const menuBtn = document.getElementById('menuBtn');
+  menuBtn.onclick = () => { const open = $nav.classList.toggle('menu-open'); menuBtn.setAttribute('aria-expanded', open); menuBtn.textContent = open ? '✕' : '☰'; };
+  document.getElementById('mainNav').addEventListener('click', e => { if (e.target.closest('a, button')) { $nav.classList.remove('menu-open'); menuBtn.textContent = '☰'; } });
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/logout'); state.me = null; location.hash = '#/login'; };
   window.addEventListener('hashchange', route);
   (async () => {

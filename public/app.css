@@ -295,3 +295,109 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
 
 .po-choice { list-style: none; background: var(--panel-2); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
 .po-choice label { display: flex; gap: 8px; align-items: baseline; color: var(--text); font-size: .95rem; font-weight: 500; margin: 0; cursor: pointer; flex-wrap: wrap; }
+
+/* =========================================================== PHONES */
+.phone-only, .menu-btn { display: none; }
+.filter-group { display: contents; }
+.toolbar > #fQ { order: 5; }
+.toolbar > #filterBtn { order: 5; }
+.filter-group > #fClear { order: 6; }
+.toolbar > .spacer { order: 7; }
+.toolbar > #addGameBtn { order: 8; }
+.toolbar > #draftBtn { order: 9; }
+
+@media (max-width: 700px) {
+  .phone-only { display: revert; }
+  .row.phone-only { display: flex; }
+  .desktop-only { display: none !important; }
+  body { font-size: 14px; }
+
+  /* compact top bar with a menu button */
+  .topnav { padding: 6px 12px; border-bottom-width: 2px; flex-wrap: nowrap; }
+  .brand { font-size: 1.15rem; }
+  .menu-btn { display: inline-grid; place-items: center; width: 40px; height: 36px; border-radius: 6px; border: 1px solid rgba(255,255,255,.35); background: transparent; color: #fff; font-size: 1.3rem; cursor: pointer; }
+  .topnav nav { display: none; position: absolute; top: 100%; left: 0; right: 0; background: var(--leafs); flex-direction: column; align-items: stretch; padding: 6px 12px 12px; border-bottom: 2px solid #fff; box-shadow: 0 10px 20px rgba(0,0,0,.4); }
+  .topnav.menu-open nav { display: flex; }
+  .topnav nav a, .topnav nav .linklike { padding: 11px 10px; font-size: 1.15rem; text-align: left; }
+  body.on-board .topnav { position: relative; }  /* scrolls away on the board to give the games room */
+
+  .page { padding: 16px 12px 40px; }
+  h1 { font-size: 1.6rem; }
+  .panel { padding: 14px; }
+
+  /* --- draft board: whole page scrolls; header + search stick to the top */
+  .board-page { height: auto; min-height: 0; display: block; }
+  .board-top { position: sticky; top: 0; z-index: 15; background: #0a0d12; box-shadow: 0 4px 12px rgba(0,0,0,.45); }
+  .scoreboard { grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; border-bottom: 0; }
+  .sb-cell { padding: 6px 8px; gap: 8px; border-right: 1px solid var(--line); }
+  .sb-cell:first-child { padding-left: 10px; }
+  .clock-ctrls { display: none; }
+  .clock { font-size: 1.9rem; }
+  .clock-sub { display: none; }
+  .rp { min-width: 0; }
+  .rp .n { font-size: 1.5rem; line-height: 1; }
+  .rp .l { font-size: .62rem; }
+  .sb-cell.onclock { grid-column: auto; border: 0; min-width: 0; padding-right: 4px; }
+  .onclock .who { gap: 8px; }
+  .onclock .avatar.lg { width: 34px; height: 34px; font-size: 1rem; }
+  .onclock .yours { font-size: .62rem; letter-spacing: .06em; }
+  .onclock .name { font-size: 1.3rem; }
+  .onclock .nextup { display: none; }
+  .onclock .row { flex-wrap: wrap; gap: 6px; }
+  .onclock .btn { padding: 5px 9px; font-size: .85rem; }
+  .onclock > div > .name, .onclock div[style*="font-size:2"] { font-size: 1.15rem !important; }
+  .more-btn { display: grid; width: 38px; height: 38px; margin-right: 8px; font-size: 1.3rem; color: var(--text); }
+  .phone-line { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 10px 5px; font-family: var(--cond); font-size: .95rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; border-top: 1px solid var(--line); }
+  .phone-line .nx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .phone-line .nx b { color: #fff; }
+  .phone-line .dots { display: flex; gap: 4px; flex: none; }
+  .phone-line .who { position: relative; display: inline-flex; }
+  .phone-line .who::after { content: ''; position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px; border-radius: 50%; background: #4b5563; border: 1.5px solid #0a0d12; }
+  .phone-line .who.on::after { background: #3ddc84; }
+  .phone-line .who.off .avatar { filter: grayscale(1); opacity: .45; }
+
+  .toolbar { padding: 6px 10px; gap: 6px; flex-wrap: nowrap; border-top: 1px solid var(--line); }
+  .toolbar > #fQ { order: 1; flex: 1 1 auto; min-width: 0; padding: 7px 9px; }
+  .toolbar > #filterBtn { order: 2; flex: none; }
+  .toolbar > .spacer, .toolbar > #addGameBtn { display: none; }
+  .filter-group { display: none; }
+  .toolbar.filters-open { flex-wrap: wrap; }
+  .toolbar.filters-open .filter-group { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; order: 3; padding: 8px 0 4px; }
+  .filter-group select { width: 100%; flex: 1 1 100%; }
+  .filter-group .dow-chips { flex-wrap: wrap; width: 100%; }
+  .filter-group .dow-chips button { flex: 1; min-width: 0; padding: 8px 2px; }
+  .filter-group .show-chips .k { width: 100%; }
+
+  .banner { font-size: 1rem; padding: 4px 8px; }
+  .banner .presence, .banner .legend { display: none !important; }
+  .banner { display: none; }
+
+  /* games: one scrolling list, two cards across, sticky month/round headings */
+  .board { display: block; overflow: visible; max-height: none; padding: 6px 8px 96px; }
+  .month { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; max-width: none; min-width: 0; margin-bottom: 10px; }
+  .month-head { grid-column: 1 / -1; position: sticky; top: var(--board-top, 0px); z-index: 5; font-size: 1.05rem; padding: 5px; }
+  .empty-month { grid-column: 1 / -1; }
+  .card { padding: 6px 7px; min-width: 0; }
+  .card .top { font-size: .82rem; }
+  .card .city { font-size: .74rem; }
+  .card .opp { font-size: 1.22rem; }
+  .card .opp .logo { width: 22px; height: 22px; }
+  .card.taken .opp { font-size: 1rem; }
+  .card .by { font-size: .82rem; }
+
+  /* big thumb-reach draft button once a game is selected */
+  .toolbar > #draftBtn { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 30; padding: 14px; font-size: 1.15rem; box-shadow: 0 8px 24px rgba(0,0,0,.55); justify-content: center; }
+  .toolbar > #draftBtn:disabled { display: none; }
+  .ticker { display: none; }
+  .toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
+
+  .modal { align-items: end; padding: 0; }
+  .modal .box { border-radius: 14px 14px 0 0; max-height: 88vh; overflow: auto; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-width: none; }
+  .modal .big { font-size: 1.7rem; }
+  .ctrl-list .btn { padding: 12px 14px; }
+  .games-table input, .games-table select { min-width: 80px; }
+
+  .draft-item .row { width: 100%; }
+  .draft-item .row .btn { flex: 1; }
+  .auth-card { padding: 22px 18px; }
+}
