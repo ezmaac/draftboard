@@ -33,6 +33,10 @@ const torontoToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function gameLabel(g) {
+  if (g.round) {
+    const t = BY_ABBR[g.opponent];
+    return `Playoffs Round ${g.round}, Game ${g.game_no}${t ? ` vs ${t.city} ${t.name}` : ''}${g.date ? ` (${g.date})` : ''}`;
+  }
   const [y, m, d] = g.date.split('-').map(Number);
   const dow = DOW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
   const t = BY_ABBR[g.opponent];
@@ -96,6 +100,14 @@ function shuffle(arr) {
   for (let i = a.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
 }
+/** Playoff order: drawn at random for the season's first playoff draft; later ones that season reuse it. */
+function playoffOrder(season, ids) {
+  const prior = db.prepare(`SELECT id, name FROM drafts WHERE kind = 'playoff' AND season = ? AND source = 'app' ORDER BY id LIMIT 1`).get(season);
+  if (!prior) return { order: shuffle(ids), notes: randomNote() };
+  const prev = db.prepare('SELECT user_id FROM draft_order WHERE draft_id = ? ORDER BY position').all(prior.id).map(r => r.user_id);
+  const order = [...prev.filter(id => ids.includes(id)), ...shuffle(ids.filter(id => !prev.includes(id)))];
+  return { order, notes: `Order carried over from "${prior.name}" (drawn at random once per season).` };
+}
 const randomNote = () => `Draft order drawn at random by the app on ${new Date().toLocaleString('en-US', { timeZone: 'America/Toronto', dateStyle: 'medium', timeStyle: 'short' })} (Toronto time)`;
 
 /**
@@ -131,7 +143,8 @@ function elapsedMs(d, now = Date.now()) {
   return Math.max(0, now - d.clock_started_at - d.paused_ms - pausedNow);
 }
 
-const totalPicks = (draft, games) => (draft.seat_mode === 'single' ? games.reduce((a, g) => a + g.seats, 0) : games.length);
+// A pair game is one pick; a single-seat game is one pick per seat.
+const totalPicks = (_draft, games) => games.reduce((a, g) => a + (g.single ? g.seats : 1), 0);
 
 function draftState(id) {
   const draft = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
@@ -139,7 +152,7 @@ function draftState(id) {
   const order = db.prepare(`SELECT o.position, o.user_id, u.display_name, u.username, u.color
                             FROM draft_order o JOIN users u ON u.id = o.user_id
                             WHERE o.draft_id = ? ORDER BY o.position`).all(id);
-  const games = db.prepare('SELECT * FROM games WHERE draft_id = ? ORDER BY date, time').all(id);
+  const games = db.prepare('SELECT * FROM games WHERE draft_id = ? ORDER BY round, game_no, date, time').all(id);
   const picks = db.prepare('SELECT * FROM picks WHERE draft_id = ? ORDER BY overall').all(id);
   const total = totalPicks(draft, games);
 
@@ -173,8 +186,12 @@ function notifyOnClock(id, reminder = false) {
 
 // --- live updates via Server-Sent Events
 const listeners = new Map(); // key -> Set(res)
-function broadcast(key, event = 'update') {
-  for (const res of listeners.get(String(key)) || []) res.write(`event: ${event}\ndata: {}\n\n`);
+function broadcast(key, event = 'update', data = {}) {
+  for (const res of listeners.get(String(key)) || []) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+/** Who has a given page (e.g. a draft board) open right now: user ids with at least one open connection. */
+function presence(key) {
+  return [...new Set([...(listeners.get(String(key)) || [])].map(r => r.userId))];
 }
 
 // ---------------------------------------------------------------- auth routes
@@ -336,11 +353,11 @@ app.get('/api/users', auth, (_req, res) => {
 app.get('/api/drafts', auth, (_req, res) => {
   const rows = db.prepare(`
     SELECT d.*, (SELECT COUNT(*) FROM games g WHERE g.draft_id = d.id) AS game_count,
-                (SELECT COALESCE(SUM(seats), 0) FROM games g WHERE g.draft_id = d.id) AS seat_count,
+                (SELECT COALESCE(SUM(CASE WHEN single = 1 THEN seats ELSE 1 END), 0) FROM games g WHERE g.draft_id = d.id) AS pick_slots,
                 (SELECT COUNT(*) FROM picks p WHERE p.draft_id = d.id) AS pick_count
     FROM drafts d ORDER BY d.status = 'complete', d.season DESC, d.id DESC`).all();
   res.json(rows.map(d => {
-    const out = { ...d, total_picks: d.seat_mode === 'single' ? d.seat_count : d.game_count };
+    const out = { ...d, total_picks: d.pick_slots };
     if (d.status === 'live') { const s = draftState(d.id); out.on_clock = s.on_clock; out.elapsed_ms = s.draft.elapsed_ms; }
     return out;
   }));
@@ -365,36 +382,65 @@ app.post('/api/schedule/preview', auth, admin, (req, res) => {
   res.json({ games: sampleSchedule(Number(season_start) || new Date().getFullYear()), errors: [] });
 });
 
+// Home games in a best-of-seven: with home-ice advantage 1, 2, 5, 7; without it 3, 4, 6.
+const HOME_GAMES = { true: [1, 2, 5, 7], false: [3, 4, 6] };
+const SINGLE_SEAT_ROUNDS = [4];  // the Final: each pick is one seat; rounds 1-3 are picked as pairs
+
 function cleanGame(g, kind) {
-  const date = normDate(g.date);
-  if (!date) fail(400, `Bad game date "${g.date}"`);
-  const opp = g.opponent === 'TBD' ? 'TBD' : findTeam(g.opponent)?.abbr;
+  const round = kind === 'playoff' && g.round ? Number(g.round) : null;
+  const game_no = round ? Number(g.game_no) : null;
+  if (round && !(round >= 1 && round <= 4)) fail(400, 'Playoff round must be 1-4');
+  if (round && !(game_no >= 1 && game_no <= 7)) fail(400, 'Playoff game number must be 1-7');
+  const date = g.date ? normDate(g.date) : '';
+  if (date === null || (!date && !round)) fail(400, `Bad game date "${g.date ?? ''}"`);
+  const opp = !g.opponent || g.opponent === 'TBD' ? 'TBD' : findTeam(g.opponent)?.abbr;
   if (!opp) fail(400, `Unknown opponent "${g.opponent}"`);
   const type = kind === 'playoff' ? 'playoff' : normType(g.type);
-  return { date, time: normTime(g.time), opponent: opp, type, price: normPrice(g.price), notes: String(g.notes || '').slice(0, 80) };
+  const single = round ? (SINGLE_SEAT_ROUNDS.includes(round) ? 1 : 0) : (g.single ? 1 : 0);
+  const notes = String(g.notes || (round && game_no >= 5 ? 'if necessary' : '')).slice(0, 80);
+  return { date, time: g.time ? normTime(g.time) : (round ? '' : '19:00'), opponent: opp, type, price: normPrice(g.price), notes, round, game_no, single };
+}
+const INSERT_GAME = 'INSERT INTO games (draft_id, date, time, opponent, type, price, notes, round, game_no, single) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+const insertGame = (draftId, g) => db.prepare(INSERT_GAME).run(draftId, g.date, g.time, g.opponent, g.type, g.price, g.notes, g.round, g.game_no, g.single);
+
+/** Build a playoff draft's games from round settings: [{ round, home_ice, opponent, price }]. */
+function playoffGames(rounds) {
+  if (!Array.isArray(rounds) || !rounds.length) fail(400, 'Choose at least one playoff round');
+  const out = [];
+  for (const r of rounds) {
+    for (const n of HOME_GAMES[!!r.home_ice]) out.push({ round: r.round, game_no: n, opponent: r.opponent || 'TBD', price: r.price });
+  }
+  return out;
 }
 
 app.post('/api/drafts', auth, admin, (req, res) => {
-  const { name, season, kind, mode, order_type, warn_secs, user_ids, games } = req.body || {};
+  const { name, season, kind, mode, order_type, warn_secs, user_ids, rounds } = req.body || {};
   if (!name?.trim()) fail(400, 'Name is required');
   validateParticipants((user_ids || []).map(Number));
-  if (!Array.isArray(games) || !games.length) fail(400, 'The schedule has no games');
   const k = kind === 'playoff' ? 'playoff' : 'season';
+  const games = k === 'playoff' ? playoffGames(rounds) : req.body.games;
+  if (!Array.isArray(games) || !games.length) fail(400, 'The schedule has no games');
   const clean = games.map(g => cleanGame(g, k));
-  // Playoff order is drawn at random each year — by the server, so it can't be re-rolled.
+  if (k === 'playoff') {
+    const taken = db.prepare(`SELECT DISTINCT g.round FROM games g JOIN drafts d ON d.id = g.draft_id
+                              WHERE d.kind = 'playoff' AND d.season = ? AND g.round IS NOT NULL`).all((season || '').trim()).map(r => r.round);
+    const dup = [...new Set(clean.map(g => g.round))].filter(r => taken.includes(r));
+    if (dup.length) fail(400, `Round ${dup.join(', ')} is already in another ${season} playoff draft`);
+  }
+  // Playoff order is drawn at random once per season, by the server so it can't be re-rolled.
+  // A later playoff draft that season (e.g. the Final) reuses that order.
   let order = user_ids.map(Number);
   let notes = '';
-  if (k === 'playoff') { order = shuffle(order); notes = randomNote(); }
+  if (k === 'playoff') ({ order, notes } = playoffOrder((season || '').trim(), order));
   const id = tx(() => {
     const d = db.prepare(`INSERT INTO drafts (name, season, kind, seat_mode, mode, order_type, warn_secs, created_by, notes)
                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(name.trim(), (season || '').trim(), k, k === 'playoff' ? 'single' : 'pair', mode === 'async' ? 'async' : 'live',
+      .run(name.trim(), (season || '').trim(), k, clean.some(g => g.single) ? (clean.every(g => g.single) ? 'single' : 'mixed') : 'pair', mode === 'async' ? 'async' : 'live',
         order_type === 'linear' ? 'linear' : 'snake', Math.max(0, Number(warn_secs ?? 120) || 0), req.user.id, notes);
     const draftId = Number(d.lastInsertRowid);
     const insO = db.prepare('INSERT INTO draft_order (draft_id, position, user_id) VALUES (?, ?, ?)');
     order.forEach((uid, i) => insO.run(draftId, i + 1, uid));
-    const insG = db.prepare('INSERT INTO games (draft_id, date, time, opponent, type, price, notes) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    clean.forEach(g => insG.run(draftId, g.date, g.time, g.opponent, g.type, g.price, g.notes));
+    clean.forEach(g => insertGame(draftId, g));
     return draftId;
   });
   res.json({ id });
@@ -406,10 +452,35 @@ app.post('/api/drafts/:id/games', auth, admin, (req, res) => {
   if (!d) fail(404, 'Draft not found');
   if (d.status === 'complete') fail(400, 'Draft is complete');
   const g = cleanGame(req.body || {}, d.kind);
-  db.prepare('INSERT INTO games (draft_id, date, time, opponent, type, price, notes) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(d.id, g.date, g.time, g.opponent, g.type, g.price, g.notes);
+  if (g.round && db.prepare('SELECT 1 FROM games WHERE draft_id = ? AND round = ? AND game_no = ?').get(d.id, g.round, g.game_no))
+    fail(409, `Round ${g.round} Game ${g.game_no} is already in this draft`);
+  insertGame(d.id, g);
   broadcast(d.id);
   res.json(draftState(d.id));
+});
+
+// Edit a game — e.g. fill in a playoff game's date and opponent once they're known. Allowed any time.
+app.put('/api/drafts/:id/games/:gid', auth, admin, (req, res) => {
+  const d = db.prepare('SELECT * FROM drafts WHERE id = ?').get(req.params.id);
+  const old = db.prepare('SELECT * FROM games WHERE id = ? AND draft_id = ?').get(req.params.gid, req.params.id);
+  if (!d || !old) fail(404, 'Game not found');
+  const g = cleanGame({ ...old, ...req.body, round: old.round, game_no: old.game_no, single: old.single }, d.kind);
+  db.prepare('UPDATE games SET date = ?, time = ?, opponent = ?, price = ?, notes = ?, type = ? WHERE id = ?')
+    .run(g.date, g.time, g.opponent, g.price, g.notes, g.type, old.id);
+  broadcast(d.id);
+  res.json(draftState(d.id));
+});
+
+// Remove a game nobody has picked (e.g. a series ended without needing it, before the draft).
+app.delete('/api/drafts/:id/games/:gid', auth, admin, (req, res) => {
+  const g = db.prepare('SELECT * FROM games WHERE id = ? AND draft_id = ?').get(req.params.gid, req.params.id);
+  if (!g) fail(404, 'Game not found');
+  if (db.prepare('SELECT 1 FROM picks WHERE game_id = ?').get(g.id)) fail(400, 'Someone has already picked this game');
+  const d = db.prepare('SELECT status FROM drafts WHERE id = ?').get(req.params.id);
+  if (d.status === 'live') fail(400, 'Pause and reset the draft to setup before removing games');
+  db.prepare('DELETE FROM games WHERE id = ?').run(g.id);
+  broadcast(Number(req.params.id));
+  res.json(draftState(Number(req.params.id)));
 });
 
 app.delete('/api/drafts/:id', auth, admin, (req, res) => {
@@ -429,9 +500,14 @@ app.get('/api/events/:key', auth, (req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
   res.write('retry: 3000\n\n');
   if (!listeners.has(key)) listeners.set(key, new Set());
+  res.userId = req.user.id;
   listeners.get(key).add(res);
+  if (/^\d+$/.test(key)) broadcast(key, 'presence', { online: presence(key) });
   const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-  req.on('close', () => { clearInterval(ping); listeners.get(key)?.delete(res); });
+  req.on('close', () => {
+    clearInterval(ping); listeners.get(key)?.delete(res);
+    if (/^\d+$/.test(key)) broadcast(key, 'presence', { online: presence(key) });
+  });
 });
 
 app.post('/api/drafts/:id/start', auth, admin, (req, res) => {
@@ -460,7 +536,7 @@ app.post('/api/drafts/:id/pick', auth, (req, res) => {
     const game = s.games.find(g => g.id === gameId);
     if (!game) fail(404, 'Game not found in this draft');
     const taken = s.picks.filter(p => p.game_id === gameId);
-    const single = s.draft.seat_mode === 'single';
+    const single = !!game.single;
     if (single ? taken.length >= game.seats : taken.length) fail(409, 'That game is already taken');
     const seat = single ? taken.length + 1 : 0;
     const now = Date.now();
@@ -530,7 +606,10 @@ app.put('/api/drafts/:id/order', auth, admin, (req, res) => {
   let ids = (req.body?.user_ids || []).map(Number);
   validateParticipants(ids);
   let notes = d.notes;
-  if (d.kind === 'playoff') { ids = shuffle(ids); notes = randomNote(); }
+  if (d.kind === 'playoff') {
+    const first = db.prepare(`SELECT id FROM drafts WHERE kind = 'playoff' AND season = ? AND source = 'app' ORDER BY id LIMIT 1`).get(d.season);
+    if (first?.id === d.id) { ids = shuffle(ids); notes = randomNote(); } else ({ order: ids, notes } = playoffOrder(d.season, ids));
+  }
   tx(() => {
     db.prepare('DELETE FROM draft_order WHERE draft_id = ?').run(id);
     ids.forEach((uid, i) => db.prepare('INSERT INTO draft_order (draft_id, position, user_id) VALUES (?, ?, ?)').run(id, i + 1, uid));
@@ -626,7 +705,7 @@ function importDraft({ name, season, kind, order_type, csv, order, notes, aliase
     const draftId = Number(d.lastInsertRowid);
     orderIds.forEach((uid, i) => db.prepare('INSERT INTO draft_order (draft_id, position, user_id) VALUES (?, ?, ?)').run(draftId, i + 1, uid));
     const gameIds = new Map(); // date|opp -> { id, seats used }
-    const insG = db.prepare('INSERT INTO games (draft_id, date, time, opponent, type, price, notes) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    const insG = db.prepare(`INSERT INTO games (draft_id, date, time, opponent, type, price, notes, single) VALUES (?, ?, ?, ?, ?, ?, ?, ${k === 'playoff' ? 1 : 0})`);
     const insP = db.prepare(`INSERT INTO picks (draft_id, overall, round, pick_in_round, user_id, owner_id, game_id, seat, made_by, seconds_taken, picked_at)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`);
     picks.forEach((p, i) => {
@@ -712,7 +791,7 @@ app.get('/api/history/summary', auth, (_req, res) => {
 // ---------------------------------------------------------------- trades
 
 function tradeView(t) {
-  const items = db.prepare(`SELECT i.side, p.id AS pick_id, p.seat, p.owner_id, g.date, g.time, g.opponent, g.price, g.type
+  const items = db.prepare(`SELECT i.side, p.id AS pick_id, p.seat, p.owner_id, g.date, g.time, g.opponent, g.price, g.type, g.round, g.game_no, g.single
                             FROM trade_items i JOIN picks p ON p.id = i.pick_id JOIN games g ON g.id = p.game_id
                             WHERE i.trade_id = ? ORDER BY g.date`).all(t.id);
   return { ...t, give: items.filter(i => i.side === 'give'), get: items.filter(i => i.side === 'get') };
@@ -724,7 +803,7 @@ function validateTradeItems(draftId, fromUser, toUser, give, get) {
     const p = db.prepare('SELECT p.*, g.date FROM picks p JOIN games g ON g.id = p.game_id WHERE p.id = ? AND p.draft_id = ?').get(pid, draftId);
     if (!p) fail(400, 'A game in this trade is not part of the draft');
     if (p.owner_id !== owner) fail(409, `${who} no longer holds one of the games in this trade`);
-    if (p.date < today) fail(400, 'Games that have already been played cannot be traded');
+    if (p.date && p.date < today) fail(400, 'Games that have already been played cannot be traded');
     return p;
   });
   load(give, fromUser, 'The proposer');

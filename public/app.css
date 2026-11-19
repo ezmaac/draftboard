@@ -276,3 +276,19 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
 .prev-order { background: var(--panel-2); border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
 .prev-order .k { width: 100%; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
 .prev-order span { font-family: var(--cond); font-weight: 700; font-size: 1.05rem; }
+
+.po-table td, .po-table th { padding: 6px; vertical-align: middle; }
+.po-table tr.off td { opacity: .5; }
+.po-table select { min-width: 120px; padding: 5px 6px; }
+
+/* ---------- show chips + presence */
+.show-chips .k { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; align-self: center; margin-right: 4px; }
+.show-chips button { min-width: 0; padding: 6px 9px; }
+.presence { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; align-items: center; margin-top: 4px; font-family: var(--body); font-size: .85rem; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.presence .k { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.presence .who { display: inline-flex; align-items: center; gap: 5px; position: relative; }
+.presence .who::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #4b5563; margin-left: 2px; }
+.presence .who.on::after { background: #3ddc84; box-shadow: 0 0 6px #3ddc84; }
+.presence .who.off { color: var(--muted); }
+.presence .who.off .avatar { filter: grayscale(1); opacity: .5; }
+.avatar.xs { width: 20px; height: 20px; font-size: .7rem; border-width: 1px; }

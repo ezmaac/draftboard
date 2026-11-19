@@ -123,6 +123,15 @@ const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userCols.includes('active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
 // Profiles with draft history are "removed" rather than erased so past results stay intact.
 if (!userCols.includes('deleted_at')) db.exec('ALTER TABLE users ADD COLUMN deleted_at INTEGER');
+const gameCols = db.prepare('PRAGMA table_info(games)').all().map(c => c.name);
+if (!gameCols.includes('single')) {
+  // single = 1: each pick takes one seat (the other seat is a separate pick). Was a draft-wide setting.
+  db.exec('ALTER TABLE games ADD COLUMN single INTEGER NOT NULL DEFAULT 0');
+  db.exec("UPDATE games SET single = 1 WHERE draft_id IN (SELECT id FROM drafts WHERE seat_mode = 'single')");
+}
+// Playoff games are identified by round (1-4) and game number (1-7); their date may not be known yet ('').
+if (!gameCols.includes('round')) db.exec('ALTER TABLE games ADD COLUMN round INTEGER');
+if (!gameCols.includes('game_no')) db.exec('ALTER TABLE games ADD COLUMN game_no INTEGER');
 db.exec(`CREATE TABLE IF NOT EXISTS password_resets (
   token_hash TEXT PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

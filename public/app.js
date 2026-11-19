@@ -20,7 +20,13 @@
   const TYPE_LABEL = { preseason: 'Preseason', regular: 'Regular season', playoff: 'Playoffs' };
   const parseDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
   const fmtTime = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
-  const fmtGameDate = g => { const d = parseDate(g.date); return `${DOW[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`; };
+  const gDate = g => (g.date ? parseDate(g.date) : null);
+  const fmtDay = g => { const d = gDate(g); return d ? `${DOW[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}` : ''; };
+  // Playoff games are named by round and game number; their date may not be set yet.
+  const fmtGameDate = g => (g.round ? `R${g.round} G${g.game_no}${g.date ? ` · ${fmtDay(g)}` : ''}` : fmtDay(g));
+  const fmtYear = g => (g.date ? `, ${parseDate(g.date).getFullYear()}` : '');
+  const gameSort = (a, b) => (a.round || 0) - (b.round || 0) || (a.game_no || 0) - (b.game_no || 0) || (a.date || '').localeCompare(b.date || '');
+  const upcoming = (g, today) => !g.date || g.date >= today;
   const fmtMoney = n => (n == null ? '' : `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
   const fmtDur = secs => {
     if (secs == null) return '—';
@@ -37,7 +43,7 @@
   const logo = (abbr, variant = 'dark', cls = '') => (state.logoUrl && abbr && abbr !== 'TBD'
     ? `<img class="logo ${cls}" src="${esc(state.logoUrl.replace('{abbr}', abbr).replace('{variant}', variant))}" alt="" loading="lazy" onerror="this.remove()">` : '');
   const gameName = g => { const t = team(g.opponent); return `${fmtGameDate(g)} · ${t.city} ${t.name}`; };
-  const pickSeats = s => s.draft.seat_mode === 'single';
+  const anySingle = s => s.games.some(g => g.single);
   const seatLabel = p => (p.seat ? ` · seat ${p.seat}` : '');
   const usersOf = s => Object.fromEntries(s.order.map(o => [o.user_id, { id: o.user_id, display_name: o.display_name, color: o.color }]));
   // Prices are for the pair of seats (as in the Ticket Tracker); a single-seat pick is worth its share.
@@ -80,9 +86,10 @@
     } catch { /* audio unavailable */ }
   }
 
-  function live(key, fn) {
+  function live(key, fn, handlers = {}) {
     const es = new EventSource(`/api/events/${key}`);
     es.addEventListener('update', fn);
+    for (const [ev, h] of Object.entries(handlers)) es.addEventListener(ev, e => { try { h(JSON.parse(e.data)); } catch { /* ignore */ } });
     return () => es.close();
   }
 
@@ -349,7 +356,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
             <h2>Details</h2>
             <div class="field"><label>Draft type</label>
               <select id="dKind"><option value="season">Season draft — preseason + regular season, seats as pairs</option>
-              <option value="playoff">Playoff draft — one seat per pick</option></select>
+              <option value="playoff">Playoff draft — by round &amp; game (rounds 1–3 pairs, Final single seats)</option></select>
             </div>
             <div class="field"><label>Draft name</label><input type="text" id="dName"></div>
             <div class="field"><label>Season</label><input type="text" id="dSeason" value="${y}-${String(y + 1).slice(2)}"></div>
@@ -370,7 +377,13 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
             <ol class="order-list" id="order"></ol>
             <div class="row"><button class="btn sm" id="useRot">↻ Use rotation</button><button class="btn sm" id="shuffle">🎲 Randomize</button></div>
           </div>
-          <div class="panel">
+          <div class="panel" id="poPanel" hidden>
+            <h2>Playoff rounds</h2>
+            <p class="muted small">Pick the rounds this draft covers. Home games are chosen by round and game number — with home-ice advantage: games 1, 2, 5, 7; without: 3, 4, 6. Dates and opponents can be filled in later.</p>
+            <div id="poRounds"></div>
+            <div id="poSummary" class="small"></div>
+          </div>
+          <div class="panel" id="schedPanel">
             <h2>Schedule</h2>
             <div class="field"><label>Source</label>
               <select id="src">
@@ -391,7 +404,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
             <div id="schedSummary" class="small"></div>
           </div>
         </div>
-        <div class="panel">
+        <div class="panel" id="gamesPanel">
           <div class="row spread"><h2 style="margin:0">Games (<span id="gCount">0</span>)</h2><span class="muted small">Review, remove, or add games before creating the draft.</span></div>
           <div class="table-wrap"><table class="games-table">
             <thead><tr><th>Date</th><th>Time</th><th>Opponent</th><th>Type</th><th>Price (pair)</th><th>Notes</th><th></th></tr></thead>
@@ -409,16 +422,52 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
 
     const $ = s => $app.querySelector(s);
     const byId = Object.fromEntries(users.map(u => [u.id, u]));
-    const setName = () => { $('#dName').value = `${$('#dSeason').value} ${kind === 'playoff' ? 'Playoff' : 'Season'} Draft`; };
-    setName();
-    $('#dSeason').oninput = setName;
-    $('#dKind').onchange = () => {
-      kind = $('#dKind').value; setName();
-      if (kind === 'playoff') { $('#src').value = 'none'; $('#aType').value = 'playoff'; $('#src').onchange(); games = []; renderGames(); }
-      else $('#aType').value = 'regular';
-      renderOrder();
+    // --- playoff rounds: [{ round, include, home_ice, opponent, price }]; rounds 1-3 pairs, round 4 single seats
+    const poRounds = [1, 2, 3, 4].map(r => ({ round: r, include: r <= 3, home_ice: true, opponent: 'TBD', price: '' }));
+    let poTaken = {};  // round -> draft name already covering it this season
+    const roundRange = rs => { const a = rs.map(r => r.round); return a.length === 1 ? `Round ${a[0]}` : a.every((r, i) => !i || r === a[i - 1] + 1) ? `Rounds ${a[0]}–${a.at(-1)}` : `Rounds ${a.join(', ')}`; };
+    const setName = () => {
+      const inc = poRounds.filter(r => r.include && !poTaken[r.round]);
+      $('#dName').value = kind === 'playoff' ? `${$('#dSeason').value} Playoffs${inc.length ? ` — ${roundRange(inc)}` : ''}` : `${$('#dSeason').value} Season Draft`;
+    };
+    const loadPoTaken = async () => {
+      poTaken = {};
+      const season = $('#dSeason').value.trim();
+      const prior = (await api('GET', '/api/drafts')).filter(d => d.kind === 'playoff' && d.season === season && d.source !== 'import');
+      for (const d of prior) (await api('GET', `/api/drafts/${d.id}`)).games.forEach(g => { if (g.round) poTaken[g.round] = d.name; });
+      poRounds.forEach(r => { if (poTaken[r.round]) r.include = false; });
+      if (!poRounds.some(r => r.include)) { const next = poRounds.find(r => !poTaken[r.round]); if (next) next.include = true; }
+    };
+    const renderPo = () => {
+      $('#poRounds').innerHTML = `<table class="po-table"><thead><tr><th></th><th>Round</th><th>Home ice</th><th>Home games</th><th>Seats per pick</th><th>Opponent</th><th>Price (pair)</th></tr></thead><tbody>${poRounds.map((r, i) => {
+        const taken = poTaken[r.round];
+        return `<tr class="${r.include ? '' : 'off'}">
+          <td><input type="checkbox" data-po-inc="${i}" ${r.include ? 'checked' : ''} ${taken ? 'disabled' : ''}></td>
+          <td><b>Round ${r.round}</b>${r.round === 4 ? ' <span class="muted small">Final</span>' : ''}${taken ? `<div class="muted small">in “${esc(taken)}”</div>` : ''}</td>
+          <td><select data-po-hi="${i}"><option value="1" ${r.home_ice ? 'selected' : ''}>Yes — 4 games</option><option value="0" ${r.home_ice ? '' : 'selected'}>No — 3 games</option></select></td>
+          <td>${(r.home_ice ? [1, 2, 5, 7] : [3, 4, 6]).map(n => `G${n}`).join(' ')}</td>
+          <td>${r.round === 4 ? '<span class="pill live" style="background:#2b2340;color:#c9b6ff">1 seat</span>' : '<span class="pill setup">pair</span>'}</td>
+          <td><select data-po-opp="${i}">${teamOptions(r.opponent)}</select></td>
+          <td><input type="number" min="0" data-po-price="${i}" value="${esc(r.price)}" placeholder="$" style="width:90px"></td></tr>`; }).join('')}</tbody></table>`;
+      const q = sel => $app.querySelectorAll(sel);
+      q('[data-po-inc]').forEach(el => (el.onchange = () => { poRounds[el.dataset.poInc].include = el.checked; setName(); renderPo(); }));
+      q('[data-po-hi]').forEach(el => (el.onchange = () => { poRounds[el.dataset.poHi].home_ice = el.value === '1'; renderPo(); }));
+      q('[data-po-opp]').forEach(el => (el.onchange = () => { poRounds[el.dataset.poOpp].opponent = el.value; }));
+      q('[data-po-price]').forEach(el => (el.oninput = () => { poRounds[el.dataset.poPrice].price = el.value; }));
       renderSummary();
     };
+    const nextSeason = `${y}-${String(y + 1).slice(2)}`;
+    const syncKind = async () => {
+      // Playoffs belong to the season just drafted; a new season draft is for the next one.
+      if (kind === 'playoff' && rot.previous && $('#dSeason').value === nextSeason) $('#dSeason').value = rot.previous.season;
+      if (kind === 'season' && rot.previous && $('#dSeason').value === rot.previous.season) $('#dSeason').value = nextSeason;
+      $('#poPanel').hidden = kind !== 'playoff'; $('#schedPanel').hidden = kind === 'playoff'; $('#gamesPanel').hidden = kind === 'playoff';
+      if (kind === 'playoff') { await loadPoTaken(); renderPo(); }
+      setName(); renderOrder(); renderSummary();
+    };
+    $('#dSeason').oninput = () => { setName(); if (kind === 'playoff') syncKind(); };
+    $('#dKind').onchange = () => { kind = $('#dKind').value; syncKind(); };
+    setName();
     $('#dMode').onchange = () => { if ($('#dMode').value === 'async') $('#dWarn').value = 0; };
 
     const rotationFor = ids => [...rot.suggested.filter(id => ids.includes(id)), ...ids.filter(id => !rot.suggested.includes(id))];
@@ -436,7 +485,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       $('#useRot').hidden = kind === 'playoff' || !rot.previous;
       const pv = $app.querySelector('.prev-order'); if (pv) pv.hidden = kind === 'playoff';
       if (kind === 'playoff') {
-        $('#order').innerHTML = `<li class="muted">🎲 Playoff order is drawn at random by the app when you create the draft — ${order.length} partners.</li>`;
+        $('#order').innerHTML = `<li class="muted">🎲 Playoff order is drawn at random by the app once per season — if another ${esc($('#dSeason').value)} playoff draft exists, its order is reused. ${order.length} partners.</li>`;
         renderSummary(); return;
       }
       $('#order').innerHTML = order.map((id, i) => `
@@ -449,8 +498,15 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       renderSummary();
     };
     const renderSummary = () => {
-      const picks = kind === 'playoff' ? games.length * 2 : games.length;
       const n = order.length;
+      if (kind === 'playoff') {
+        const inc = poRounds.filter(r => r.include && !poTaken[r.round]);
+        const nGames = inc.reduce((a, r) => a + (r.home_ice ? 4 : 3), 0);
+        const picks = inc.reduce((a, r) => a + (r.home_ice ? 4 : 3) * (r.round === 4 ? 2 : 1), 0);
+        $('#poSummary').innerHTML = inc.length ? `<p><b>${roundRange(inc)}</b>: ${nGames} home games → ${picks} picks${n ? ` → ${Math.floor(picks / n)} each${picks % n ? `, plus 1 extra for the first ${picks % n} in the order` : ''}` : ''}.</p>` : '<p class="error">Choose at least one round.</p>';
+        return;
+      }
+      const picks = games.length;
       const months = {};
       games.forEach(g => { const d = parseDate(g.date); const k = `${MONTHS[d.getMonth()]} ${d.getFullYear()}`; months[k] = (months[k] || 0) + 1; });
       const types = {}; games.forEach(g => (types[g.type] = (types[g.type] || 0) + 1));
@@ -501,6 +557,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         const { id } = await api('POST', '/api/drafts', {
           name: $('#dName').value, season: $('#dSeason').value, kind, mode: $('#dMode').value, order_type: $('#dType').value,
           warn_secs: Math.round(Number($('#dWarn').value || 0) * 60), user_ids: order, games,
+          rounds: poRounds.filter(r => r.include && !poTaken[r.round]).map(r => ({ round: r.round, home_ice: r.home_ice, opponent: r.opponent, price: r.price })),
         });
         toast('Draft created'); location.hash = `#/board/${id}`;
       } catch (e) { $('#createErr').textContent = e.message; }
@@ -607,12 +664,13 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     let s = await api('GET', `/api/drafts/${id}`);
     if (seq !== routeSeq) return;
     let clockBase = 0, clockT0 = 0, warnedFor = null;
+    let online = [];  // user ids with this board open (live presence)
     let selected = null;
     const f = loadFilters();
 
     function loadFilters() {
-      const d = { team: '', dows: [], type: '', hideTaken: false, mine: false, q: '' };
-      try { return { ...d, ...JSON.parse(localStorage.getItem('boardFilters') || '{}') }; } catch { return d; }
+      const d = { team: '', dows: [], type: '', show: [], q: '' };
+      try { const v = { ...d, ...JSON.parse(localStorage.getItem('boardFilters') || '{}') }; if (!Array.isArray(v.show)) v.show = []; return v; } catch { return d; }
     }
     function saveFilters() { try { localStorage.setItem('boardFilters', JSON.stringify(f)); } catch { /* storage unavailable */ } }
 
@@ -638,15 +696,16 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
           <select id="fTeam"><option value="">All opponents</option>${[...new Set(s.games.map(g => g.opponent))].map(team).sort((a, b) => (a.city + a.name).localeCompare(b.city + b.name)).map(t => `<option value="${t.abbr}">${esc(t.city)} ${esc(t.name)}</option>`).join('')}</select>
           <select id="fType" hidden><option value="">All game types</option><option value="preseason">Preseason</option><option value="regular">Regular season</option><option value="playoff">Playoffs</option></select>
           <div class="dow-chips" id="fDow">${DOW.map((d, i) => `<button data-dow="${i}" title="${d}">${d}</button>`).join('')}</div>
-          <label class="toggle"><input type="checkbox" id="fHide"> Available only</label>
-          <label class="toggle"><input type="checkbox" id="fMine"> My games</label>
+          <div class="dow-chips show-chips" id="fShow" title="Show games that match any selected option">
+            <span class="k">Show</span><button data-show="avail">Available</button><button data-show="mine">My games</button><button data-show="others">Taken by others</button></div>
           <input type="text" class="search" id="fQ" placeholder="🔍  Search team, date, note…">
           <button class="btn sm" id="fClear">Clear</button>
           <span class="spacer"></span>
-          <button class="btn sm" id="addGameBtn" hidden>+ Game</button>
+          <button class="btn sm" id="addGameBtn" hidden>Games…</button>
           <button class="btn go" id="draftBtn" disabled>Draft game</button>
         </div>
         <div class="banner"><span id="banner"></span>
+          <div class="presence" id="presence"></div>
           <div class="legend" style="justify-content:center;margin-top:2px"><span><i style="background:var(--atl)"></i>Atlantic</span><span><i style="background:var(--met)"></i>Metropolitan</span><span><i style="background:var(--cen)"></i>Central</span><span><i style="background:var(--pac)"></i>Pacific</span></div></div>
         <div class="board" id="board"></div>
         <div class="ticker"><div class="tag">🍁 PICKS</div><div class="track"><div class="scroll" id="ticker"></div></div></div>
@@ -654,13 +713,20 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     const $ = sel => $app.querySelector(sel);
 
     // filters
-    $('#fTeam').value = f.team; $('#fType').value = f.type; $('#fHide').checked = f.hideTaken; $('#fMine').checked = f.mine; $('#fQ').value = f.q;
-    const syncDow = () => $('#fDow').querySelectorAll('button').forEach(b => b.classList.toggle('on', f.dows.includes(+b.dataset.dow)));
+    $('#fTeam').value = f.team; $('#fType').value = f.type; $('#fQ').value = f.q;
+    const syncDow = () => {
+      $('#fDow').querySelectorAll('button').forEach(b => b.classList.toggle('on', f.dows.includes(+b.dataset.dow)));
+      $('#fShow').querySelectorAll('button').forEach(b => b.classList.toggle('on', f.show.includes(b.dataset.show)));
+    };
     syncDow();
+    $('#fShow').onclick = e => {
+      const b = e.target.closest('[data-show]'); if (!b) return;
+      const v = b.dataset.show;
+      f.show = f.show.includes(v) ? f.show.filter(x => x !== v) : [...f.show, v];
+      saveFilters(); syncDow(); renderBoard();
+    };
     $('#fTeam').onchange = () => { f.team = $('#fTeam').value; saveFilters(); renderBoard(); };
     $('#fType').onchange = () => { f.type = $('#fType').value; saveFilters(); renderBoard(); };
-    $('#fHide').onchange = () => { f.hideTaken = $('#fHide').checked; saveFilters(); renderBoard(); };
-    $('#fMine').onchange = () => { f.mine = $('#fMine').checked; saveFilters(); renderBoard(); };
     $('#fQ').oninput = () => { f.q = $('#fQ').value; saveFilters(); renderBoard(); };
     $('#fDow').onclick = e => {
       const b = e.target.closest('[data-dow]'); if (!b) return;
@@ -669,8 +735,8 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       saveFilters(); syncDow(); renderBoard();
     };
     $('#fClear').onclick = () => {
-      Object.assign(f, { team: '', dows: [], type: '', hideTaken: false, mine: false, q: '' }); saveFilters();
-      $('#fTeam').value = ''; $('#fType').value = ''; $('#fHide').checked = false; $('#fMine').checked = false; $('#fQ').value = ''; syncDow(); renderBoard();
+      Object.assign(f, { team: '', dows: [], type: '', show: [], q: '' }); saveFilters();
+      $('#fTeam').value = ''; $('#fType').value = ''; $('#fQ').value = ''; syncDow(); renderBoard();
     };
 
     const myTurn = () => s.draft.status === 'live' && s.on_clock && (s.on_clock.user_id === state.me.id || state.me.is_admin);
@@ -686,9 +752,12 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       $('#nudgeBtn').disabled = d.status !== 'live';
       $('#addGameBtn').hidden = !(state.me.is_admin && d.status !== 'complete');
       $('#fType').hidden = new Set(s.games.map(g => g.type)).size < 2;
+      $('#fDow').hidden = !s.games.some(g => g.date);
+      $('.legend').hidden = s.draft.kind === 'playoff';
+      renderPresence();
       $('#rnd').textContent = s.on_clock ? s.on_clock.round : d.status === 'complete' ? '✓' : '–';
       $('#pk').textContent = s.on_clock ? s.on_clock.pick_in_round : '–';
-      $('#banner').innerHTML = `${esc(d.name)} <span class="muted">· ${s.picks.length}/${d.total_picks} picks${pickSeats(s) ? ' (single seats)' : ''}${d.mode === 'async' ? ' · drafting by email' : ''}${d.status === 'setup' ? ' · not started' : ''}${d.status === 'complete' ? ' · complete' : ''}</span>`;
+      $('#banner').innerHTML = `${esc(d.name)} <span class="muted">· ${s.picks.length}/${d.total_picks} picks${anySingle(s) ? (s.games.every(g => g.single) ? ' (single seats)' : ' (Final by single seat)') : ''}${d.mode === 'async' ? ' · drafting by email' : ''}${d.status === 'setup' ? ' · not started' : ''}${d.status === 'complete' ? ' · complete' : ''}</span>`;
 
       let html = '';
       const mine = s.on_clock?.user_id === state.me.id;
@@ -736,15 +805,20 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     }
 
     function gameMatches(g, gp) {
-      const d = parseDate(g.date);
+      const d = gDate(g);
       if (f.team && g.opponent !== f.team) return false;
       if (f.type && g.type !== f.type) return false;
-      if (f.dows.length && !f.dows.includes(d.getDay())) return false;
-      if (f.mine && !gp.some(p => p.owner_id === state.me.id)) return false;
-      if (f.hideTaken && gp.length >= (pickSeats(s) ? g.seats : 1)) return false;
+      if (f.dows.length && (!d || !f.dows.includes(d.getDay()))) return false;
+      if (f.show.length) {
+        // A game shows if it matches ANY selected option (a half-taken single-seat game can be both available and taken).
+        const avail = gp.length < (g.single ? g.seats : 1);
+        const mine = gp.some(p => p.owner_id === state.me.id);
+        const others = gp.some(p => p.owner_id !== state.me.id);
+        if (!((f.show.includes('avail') && avail) || (f.show.includes('mine') && mine) || (f.show.includes('others') && others))) return false;
+      }
       if (f.q) {
         const t = team(g.opponent);
-        const hay = `${t.abbr} ${t.city} ${t.name} ${fmtGameDate(g)} ${MONTHS_LONG[d.getMonth()]} ${g.notes} ${TYPE_LABEL[g.type]}`.toLowerCase();
+        const hay = `${t.abbr} ${t.city} ${t.name} ${fmtGameDate(g)} ${d ? MONTHS_LONG[d.getMonth()] : ''} ${g.round ? `round ${g.round} game ${g.game_no}` : ''} ${g.notes} ${TYPE_LABEL[g.type]}`.toLowerCase();
         if (!f.q.toLowerCase().split(/\s+/).every(w => hay.includes(w))) return false;
       }
       return true;
@@ -760,14 +834,15 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       const picksByGame = {};
       s.picks.forEach(p => (picksByGame[p.game_id] ||= []).push(p));
       const users = usersOf(s);
-      const single = pickSeats(s);
       const months = new Map();
       s.games.forEach(g => {
-        const d = parseDate(g.date); const k = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}`;
-        if (!months.has(k)) months.set(k, { label: MONTHS_LONG[d.getMonth()], year: d.getFullYear(), games: [] });
+        let k, col;
+        if (g.round) { k = `r${g.round}`; col = { label: `Round ${g.round}`, year: g.single ? 'single seats' : 'pairs', games: [] }; }
+        else { const d = gDate(g); k = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}`; col = { label: MONTHS_LONG[d.getMonth()], year: d.getFullYear(), games: [] }; }
+        if (!months.has(k)) months.set(k, col);
         months.get(k).games.push(g);
       });
-      const full = g => (picksByGame[g.id] || []).length >= (single ? g.seats : 1);
+      const full = g => (picksByGame[g.id] || []).length >= (g.single ? g.seats : 1);
       if (selected && full(s.games.find(g => g.id === selected))) selected = null;
       $('#board').innerHTML = [...months.values()].map(m => {
         const cards = m.games.filter(g => gameMatches(g, picksByGame[g.id] || [])).map(g => {
@@ -781,6 +856,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
               ${gp.map(p => ownerLine(p, users)).join('')}
             </div>`;
           }
+          const single = !!g.single;
           const left = single ? g.seats - gp.length : 0;
           if (s.draft.status === 'complete' && !gp.length) {
             return `<div class="card taken" style="--who:#555" title="${esc(g.notes)}">
@@ -788,8 +864,9 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
               <div class="opp">${logo(g.opponent, 'dark', 'sm muted-logo')}<span>${esc(t.name)}</span></div><div class="by"><span class="slot" style="margin-left:0">${esc(g.notes || 'not drafted')}</span></div></div>`;
           }
           return `<button class="card ${t.div} ${selected === g.id ? 'selected' : ''}" data-game="${g.id}">
-            <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${fmtTime(g.time)}</span></div>
-            <div class="city"><span>${esc(t.city)}</span><span title="Price for the pair">${fmtMoney(g.price)}</span></div>
+            <div class="top">${g.round ? `<span>${badge}Game ${g.game_no}</span><span>${g.date ? `${fmtDay(g)}${g.time ? ` · ${fmtTime(g.time)}` : ''}` : 'Date TBD'}</span>`
+              : `<span>${badge}${fmtGameDate(g)}</span><span>${fmtTime(g.time)}</span>`}</div>
+            <div class="city"><span>${esc(t.city)}${single ? ' <span class="tbadge" style="background:#4b2a8a">1 SEAT</span>' : ''}</span><span title="Price for the pair">${fmtMoney(g.price)}</span></div>
             <div class="opp">${logo(g.opponent, 'light')}<span>${esc(t.name)}</span></div>
             ${g.notes ? `<div class="note">★ ${esc(g.notes)}</div>` : ''}
             ${single && gp.length ? `<div class="seats">${left} seat${left === 1 ? '' : 's'} left</div>${gp.map(p => ownerLine(p, users)).join('')}` : ''}
@@ -798,7 +875,8 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         return `<section class="month"><div class="month-head">${m.label} <span>${m.year}</span></div>${cards || '<div class="empty-month">No games match</div>'}</section>`;
       }).join('') || '<p class="muted" style="padding:16px">No games in this draft yet.</p>';
       $('#draftBtn').disabled = !(selected && myTurn());
-      $('#draftBtn').textContent = myTurn() && s.on_clock.user_id !== state.me.id ? `Draft for ${users[s.on_clock.user_id].display_name}` : single ? 'Draft seat' : 'Draft game';
+      const selG = s.games.find(g => g.id === selected);
+      $('#draftBtn').textContent = myTurn() && s.on_clock.user_id !== state.me.id ? `Draft for ${users[s.on_clock.user_id].display_name}` : selG?.single ? 'Draft seat' : 'Draft game';
     }
 
     function renderTicker() {
@@ -834,8 +912,8 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       modal(`
         <div class="muted small">ROUND ${s.on_clock.round} · PICK ${s.on_clock.pick_in_round} · ${behalf ? `ON BEHALF OF ${esc(forUser.display_name.toUpperCase())}` : 'YOUR PICK'}</div>
         <div class="big row" style="gap:12px">${logo(g.opponent, 'dark', 'lg')}<span>${esc(t.city)} ${esc(t.name)}</span></div>
-        <p>${fmtGameDate(g)} · ${fmtTime(g.time)}${g.price ? ` · ${fmtMoney(g.price)} for the pair${pickSeats(s) ? ` (${fmtMoney(g.price / g.seats)}/seat)` : ''}` : ''}${g.notes ? ` · ${esc(g.notes)}` : ''}</p>
-        ${pickSeats(s) ? `<p class="muted">One seat (seat ${taken.length + 1} of ${g.seats})${taken.length ? ` — the other is held by ${esc(usersOf(s)[taken[0].owner_id].display_name)}` : ''}.</p>` : ''}
+        <p>${g.round ? `Round ${g.round}, Game ${g.game_no}${g.date ? ` · ${fmtDay(g)}` : ' · date TBD'}` : fmtGameDate(g)}${g.time ? ` · ${fmtTime(g.time)}` : ''}${g.price ? ` · ${fmtMoney(g.price)} for the pair${g.single ? ` (${fmtMoney(g.price / g.seats)}/seat)` : ''}` : ''}${g.notes ? ` · ${esc(g.notes)}` : ''}</p>
+        ${g.single ? `<p class="muted">One seat (seat ${taken.length + 1} of ${g.seats})${taken.length ? ` — the other is held by ${esc(usersOf(s)[taken[0].owner_id].display_name)}` : ''}.</p>` : ''}
         <div class="row"><button class="btn go" id="confirmPick">Lock it in</button><button class="btn" data-close>Cancel</button></div>`,
         ($m, close) => {
           $m.querySelector('#confirmPick').onclick = async () => {
@@ -910,22 +988,58 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       try { const r = await api('POST', `/api/drafts/${id}/nudge`); toast(r.mail_enabled ? 'Reminder email sent' : 'Email isn’t configured on the server yet — reminder logged only'); }
       catch (e) { toast(e.message, true); }
     };
-    $('#addGameBtn').onclick = () => modal(`
-      <h2>Add a game</h2>
-      <div class="field"><label>Date</label><input type="date" id="mDate"></div>
-      <div class="row"><div class="field" style="flex:1"><label>Time</label><input type="time" id="mTime" value="19:00"></div>
-        <div class="field" style="flex:1"><label>Price (pair)</label><input type="number" id="mPrice" min="0"></div></div>
-      <div class="field"><label>Opponent</label><select id="mOpp">${teamOptions()}</select></div>
-      <div class="field"><label>Type</label><select id="mType"><option value="regular">Regular season</option><option value="preseason">Preseason</option><option value="playoff" ${s.draft.kind === 'playoff' ? 'selected' : ''}>Playoff</option></select></div>
-      <div class="field"><label>Notes</label><input type="text" id="mNotes" placeholder="e.g. Rd 1 Gm 2"></div>
-      <div class="row"><button class="btn primary" id="mAdd">Add game</button><button class="btn" data-close>Cancel</button></div>`,
-      ($m, close) => {
-        $m.querySelector('#mAdd').onclick = async () => {
-          const v = k => $m.querySelector(k).value;
-          try { s = await api('POST', `/api/drafts/${id}/games`, { date: v('#mDate'), time: v('#mTime'), price: v('#mPrice'), opponent: v('#mOpp'), type: v('#mType'), notes: v('#mNotes') }); close(); renderAll(); }
+    $('#addGameBtn').onclick = () => {
+      const playoff = s.draft.kind === 'playoff';
+      const taken = new Set(s.picks.map(p => p.game_id));
+      modal(`<h2>Games</h2>
+        <p class="muted small">Fill in dates, times, opponents and prices as they become known. Unpicked games can be removed before the draft starts.</p>
+        <div class="table-wrap" style="max-height:50vh"><table class="games-table">
+          <thead><tr><th>${playoff ? 'Game' : 'Date'}</th>${playoff ? '<th>Date</th>' : ''}<th>Time</th><th>Opponent</th><th>Price (pair)</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${s.games.slice().sort(gameSort).map(g => `<tr data-g="${g.id}">
+            ${playoff ? `<td><b>R${g.round} G${g.game_no}</b>${g.single ? ' <span class="muted small">1 seat</span>' : ''}</td>` : ''}
+            <td><input type="date" name="date" value="${esc(g.date)}"></td><td><input type="time" name="time" value="${esc(g.time)}"></td>
+            <td><select name="opponent">${teamOptions(g.opponent)}</select></td><td><input type="number" name="price" min="0" value="${g.price ?? ''}"></td>
+            <td><input type="text" name="notes" value="${esc(g.notes)}"></td>
+            <td style="white-space:nowrap"><button class="btn sm" data-save="${g.id}">Save</button>${!taken.has(g.id) && s.draft.status === 'setup' ? ` <button class="icon-btn" data-del="${g.id}" title="Remove">✕</button>` : ''}</td></tr>`).join('')}</tbody>
+        </table></div>
+        ${s.draft.status !== 'complete' ? `<h3 style="margin-top:14px">Add a game</h3>
+        <div class="row" style="align-items:flex-end">
+          ${playoff ? `<div class="field"><label>Round</label><select id="nRound">${[1, 2, 3, 4].map(r => `<option>${r}</option>`).join('')}</select></div>
+            <div class="field"><label>Game #</label><select id="nGame">${[1, 2, 3, 4, 5, 6, 7].map(n => `<option>${n}</option>`).join('')}</select></div>` : ''}
+          <div class="field"><label>Date${playoff ? ' (optional)' : ''}</label><input type="date" id="nDate"></div>
+          <div class="field"><label>Opponent</label><select id="nOpp">${teamOptions()}</select></div>
+          <div class="field"><button class="btn" id="nAdd">Add</button></div></div>` : ''}
+        <div class="row" style="margin-top:10px"><button class="btn" data-close>Close</button></div>`, ($m, close) => {
+        const val = (row, n) => row.querySelector(`[name=${n}]`).value;
+        $m.querySelectorAll('[data-save]').forEach(b => (b.onclick = async () => {
+          const row = b.closest('tr');
+          try { s = await api('PUT', `/api/drafts/${id}/games/${b.dataset.save}`, { date: val(row, 'date'), time: val(row, 'time'), opponent: val(row, 'opponent'), price: val(row, 'price'), notes: val(row, 'notes') }); renderAll(); toast('Saved'); }
           catch (e) { toast(e.message, true); }
-        };
+        }));
+        $m.querySelectorAll('[data-del]').forEach(b => (b.onclick = async () => {
+          try { s = await api('DELETE', `/api/drafts/${id}/games/${b.dataset.del}`); renderAll(); b.closest('tr').remove(); }
+          catch (e) { toast(e.message, true); }
+        }));
+        $m.querySelector('#nAdd')?.addEventListener('click', async () => {
+          const v = k => $m.querySelector(k)?.value;
+          try {
+            s = await api('POST', `/api/drafts/${id}/games`, { round: v('#nRound'), game_no: v('#nGame'), date: v('#nDate'), opponent: v('#nOpp'), type: playoff ? 'playoff' : 'regular' });
+            renderAll(); close(); $('#addGameBtn').click();
+          } catch (e) { toast(e.message, true); }
+        });
       });
+    };
+
+    // who's in the draft room
+    function renderPresence() {
+      const el = $('#presence'); if (!el) return;
+      const ids = s.order.map(o => o.user_id);
+      const users = usersOf(s);
+      const watchers = online.filter(uid => !ids.includes(uid));
+      el.innerHTML = `<span class="k">In the draft room</span>${s.order.map(o => {
+        const on = online.includes(o.user_id);
+        return `<span class="who ${on ? 'on' : 'off'}" title="${on ? 'Has the board open' : 'Not on the board right now'}">${avatar(users[o.user_id], 'xs')}${esc(o.display_name)}</span>`; }).join('')}${watchers.length ? `<span class="muted small">+${watchers.length} watching</span>` : ''}`;
+    }
 
     // live updates
     async function refresh() {
@@ -934,7 +1048,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       renderAll();
       if (s.picks.length > prevCount && s.on_clock?.user_id === state.me.id) { toast('🍁 You’re on the clock!'); beep(); }
     }
-    const stop = live(id, refresh);
+    const stop = live(id, refresh, { presence: d => { online = d.online || []; renderPresence(); } });
     const timer = setInterval(tickClock, 250);
     const onKey = e => { if (e.key === 'Escape' && selected) { selected = null; renderBoard(); } };
     document.addEventListener('keydown', onKey);
@@ -1014,7 +1128,7 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
       const drafted = s.picks.filter(p => p.user_id === uid);
       const held = s.picks.filter(p => p.owner_id === uid);
       const secs = drafted.map(p => p.seconds_taken).filter(x => x != null);
-      const weekend = held.filter(p => [0, 5, 6].includes(parseDate(gameMap[p.game_id].date).getDay())).length;
+      const weekend = held.filter(p => { const d = gDate(gameMap[p.game_id]); return d && [0, 5, 6].includes(d.getDay()); }).length;
       const total = secs.reduce((a, b) => a + b, 0);
       const value = held.reduce((a, p) => a + pickValue(p, gameMap[p.game_id]), 0);
       return { held, count: held.length, weekend, value, avg: secs.length ? total / secs.length : null, max: secs.length ? Math.max(...secs) : null };
@@ -1038,13 +1152,13 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
             <div class="panel partner-col">
               <h3>${avatar(users[o.user_id])} ${esc(o.display_name)}</h3>
               <div class="stat-row">
-                <div class="stat"><div class="v">${st.count}</div><div class="k">${pickSeats(s) ? 'Seats' : 'Games'}</div></div>
+                <div class="stat"><div class="v">${st.count}</div><div class="k">${anySingle(s) ? 'Picks' : 'Games'}</div></div>
                 <div class="stat"><div class="v">${st.weekend}</div><div class="k">Fri–Sun</div></div>
                 ${anyPrice ? `<div class="stat"><div class="v">${fmtMoney(st.value)}</div><div class="k">Value</div></div>` : ''}
                 ${st.avg == null ? '' : `<div class="stat"><div class="v">${fmtDur(st.avg)}</div><div class="k">Avg pick</div></div>
                 <div class="stat"><div class="v">${fmtDur(st.max)}</div><div class="k">Longest</div></div>`}
               </div>
-              <ul class="mini-list">${st.held.slice().sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date)).map(p => { const g = gameMap[p.game_id];
+              <ul class="mini-list">${st.held.slice().sort((a, b) => gameSort(gameMap[a.game_id], gameMap[b.game_id])).map(p => { const g = gameMap[p.game_id];
                 return `<li><span class="with-logo">${logo(g.opponent, 'dark', 'xs')}${fmtGameDate(g)} · ${esc(team(g.opponent).name)}${seatLabel(p)}${p.owner_id !== p.user_id ? ` <span class="muted" title="Drafted by ${esc(users[p.user_id].display_name)}">⇄ via trade</span>` : ''}</span><span>${orderKnown ? `#${p.overall}` : ''}${p.seconds_taken != null ? ` · ${fmtDur(p.seconds_taken)}` : ''}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
             </div>`; }).join('')}
         </div>
@@ -1063,9 +1177,9 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
           <h2>${orderKnown ? 'Pick log' : 'Games by date'}</h2>
           <div class="table-wrap"><table>
             <thead><tr>${orderKnown ? `<th>#</th>${regular ? '<th>Rd.Pick</th>' : ''}` : ''}<th>Partner</th><th>Game</th>${anyPrice ? '<th>Price</th>' : ''}${s.picks.some(p => p.seconds_taken != null) ? '<th>Time taken</th>' : ''}${imported ? '' : '<th>Picked at</th>'}</tr></thead>
-            <tbody>${(orderKnown ? s.picks : s.picks.slice().sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date))).map(p => { const g = gameMap[p.game_id]; const t = team(g.opponent);
+            <tbody>${(orderKnown ? s.picks : s.picks.slice().sort((a, b) => gameSort(gameMap[a.game_id], gameMap[b.game_id]))).map(p => { const g = gameMap[p.game_id]; const t = team(g.opponent);
               return `<tr>${orderKnown ? `<td>${p.overall}</td>${regular ? `<td>${p.round}.${p.pick_in_round}</td>` : ''}` : ''}<td>${esc(users[p.user_id].display_name)}${p.made_by && p.made_by !== p.user_id ? ' <span class="muted small">(entered by commissioner)</span>' : ''}</td>
-                <td class="with-logo">${logo(g.opponent, 'dark', 'xs')}${fmtGameDate(g)}, ${parseDate(g.date).getFullYear()} · ${g.time ? `${fmtTime(g.time)} · ` : ''}${esc(t.city)} ${esc(t.name)}${seatLabel(p)}${g.notes ? ` <span class="muted small">${esc(g.notes)}</span>` : ''}${g.type !== 'regular' ? ` <span class="tbadge">${g.type === 'preseason' ? 'PRE' : 'PO'}</span>` : ''}</td>
+                <td class="with-logo">${logo(g.opponent, 'dark', 'xs')}${fmtGameDate(g)}${fmtYear(g)} · ${g.time ? `${fmtTime(g.time)} · ` : ''}${esc(t.city)} ${esc(t.name)}${seatLabel(p)}${g.notes ? ` <span class="muted small">${esc(g.notes)}</span>` : ''}${g.type !== 'regular' ? ` <span class="tbadge">${g.type === 'preseason' ? 'PRE' : 'PO'}</span>` : ''}</td>
                 ${anyPrice ? `<td>${fmtMoney(pickValue(p, g))}</td>` : ''}${s.picks.some(x => x.seconds_taken != null) ? `<td>${fmtDur(p.seconds_taken)}</td>` : ''}${imported ? '' : `<td class="muted">${fmtWhen(p.picked_at)}</td>`}</tr>`; }).join('')}</tbody>
           </table></div>
         </div>
@@ -1147,8 +1261,8 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
         const other = Number($('#tWith').value);
         const gameMap = Object.fromEntries(s.games.map(g => [g.id, g]));
         const list = (owner, name) => {
-          const ps = s.picks.filter(p => p.owner_id === owner && gameMap[p.game_id].date >= today)
-            .sort((a, b) => gameMap[a.game_id].date.localeCompare(gameMap[b.game_id].date));
+          const ps = s.picks.filter(p => p.owner_id === owner && upcoming(gameMap[p.game_id], today))
+            .sort((a, b) => gameSort(gameMap[a.game_id], gameMap[b.game_id]));
           return `<div><h3>${name}</h3><div class="check-list trade-pick">${ps.map(p => { const g = gameMap[p.game_id];
             return `<label><input type="checkbox" name="${owner === me ? 'give' : 'get'}" value="${p.id}"> ${logo(g.opponent, 'dark', 'xs')}${esc(gameName(g))}${seatLabel(p)} <span class="muted">${fmtMoney(pickValue(p, g))}</span></label>`; }).join('') || '<p class="muted">No upcoming games.</p>'}</div></div>`;
         };
