@@ -292,3 +292,6 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
 .presence .who.off { color: var(--muted); }
 .presence .who.off .avatar { filter: grayscale(1); opacity: .5; }
 .avatar.xs { width: 20px; height: 20px; font-size: .7rem; border-width: 1px; }
+
+.po-choice { list-style: none; background: var(--panel-2); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+.po-choice label { display: flex; gap: 8px; align-items: baseline; color: var(--text); font-size: .95rem; font-weight: 500; margin: 0; cursor: pointer; flex-wrap: wrap; }

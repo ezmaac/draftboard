@@ -425,6 +425,8 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     // --- playoff rounds: [{ round, include, home_ice, opponent, price }]; rounds 1-3 pairs, round 4 single seats
     const poRounds = [1, 2, 3, 4].map(r => ({ round: r, include: r <= 3, home_ice: true, opponent: 'TBD', price: '' }));
     let poTaken = {};  // round -> draft name already covering it this season
+    let poPrior = null;  // earlier playoff draft this season, whose order can be reused
+    let poOrderMode = 'reuse';
     const roundRange = rs => { const a = rs.map(r => r.round); return a.length === 1 ? `Round ${a[0]}` : a.every((r, i) => !i || r === a[i - 1] + 1) ? `Rounds ${a[0]}–${a.at(-1)}` : `Rounds ${a.join(', ')}`; };
     const setName = () => {
       const inc = poRounds.filter(r => r.include && !poTaken[r.round]);
@@ -433,6 +435,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     const loadPoTaken = async () => {
       poTaken = {};
       const season = $('#dSeason').value.trim();
+      poPrior = await api('GET', `/api/drafts/playoff-prior?season=${encodeURIComponent(season)}`);
       const prior = (await api('GET', '/api/drafts')).filter(d => d.kind === 'playoff' && d.season === season && d.source !== 'import');
       for (const d of prior) (await api('GET', `/api/drafts/${d.id}`)).games.forEach(g => { if (g.round) poTaken[g.round] = d.name; });
       poRounds.forEach(r => { if (poTaken[r.round]) r.include = false; });
@@ -463,6 +466,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       if (kind === 'season' && rot.previous && $('#dSeason').value === rot.previous.season) $('#dSeason').value = nextSeason;
       $('#poPanel').hidden = kind !== 'playoff'; $('#schedPanel').hidden = kind === 'playoff'; $('#gamesPanel').hidden = kind === 'playoff';
       if (kind === 'playoff') { await loadPoTaken(); renderPo(); }
+      renderOrder();
       setName(); renderOrder(); renderSummary();
     };
     $('#dSeason').oninput = () => { setName(); if (kind === 'playoff') syncKind(); };
@@ -485,7 +489,13 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       $('#useRot').hidden = kind === 'playoff' || !rot.previous;
       const pv = $app.querySelector('.prev-order'); if (pv) pv.hidden = kind === 'playoff';
       if (kind === 'playoff') {
-        $('#order').innerHTML = `<li class="muted">🎲 Playoff order is drawn at random by the app once per season — if another ${esc($('#dSeason').value)} playoff draft exists, its order is reused. ${order.length} partners.</li>`;
+        $('#order').innerHTML = poPrior ? `
+          <li class="po-choice"><label><input type="radio" name="poOrder" value="reuse" ${poOrderMode === 'reuse' ? 'checked' : ''}>
+            Use the order from “${esc(poPrior.name)}”: <b>${poPrior.order.map(o => `${o.position}. ${esc(o.display_name)}`).join('  ')}</b></label></li>
+          <li class="po-choice"><label><input type="radio" name="poOrder" value="random" ${poOrderMode === 'random' ? 'checked' : ''}>
+            🎲 Draw a new random order <span class="muted">(drawn by the app when you create the draft)</span></label></li>`
+          : `<li class="muted">🎲 The playoff order is drawn at random by the app when you create the draft. ${order.length} partners.</li>`;
+        $app.querySelectorAll('[name=poOrder]').forEach(r => (r.onchange = () => { poOrderMode = r.value; }));
         renderSummary(); return;
       }
       $('#order').innerHTML = order.map((id, i) => `
@@ -558,6 +568,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
           name: $('#dName').value, season: $('#dSeason').value, kind, mode: $('#dMode').value, order_type: $('#dType').value,
           warn_secs: Math.round(Number($('#dWarn').value || 0) * 60), user_ids: order, games,
           rounds: poRounds.filter(r => r.include && !poTaken[r.round]).map(r => ({ round: r.round, home_ice: r.home_ice, opponent: r.opponent, price: r.price })),
+          playoff_order: poPrior ? poOrderMode : 'random',
         });
         toast('Draft created'); location.hash = `#/board/${id}`;
       } catch (e) { $('#createErr').textContent = e.message; }
@@ -963,9 +974,12 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       const all = (await api('GET', '/api/users')).filter(u => u.active);
       let order = s.order.map(o => o.user_id).filter(id => all.some(u => u.id === id));
       const playoff = s.draft.kind === 'playoff';
+      const prior = playoff ? await api('GET', `/api/drafts/playoff-prior?season=${encodeURIComponent(s.draft.season)}&before=${id}`) : null;
       modal(`<h2>Partners &amp; order</h2>
         <div class="check-list" id="eoWho"></div>
-        ${playoff ? '<p class="muted small">🎲 The playoff order is re-drawn at random when you save.</p>' : '<ol class="order-list" id="eoOrder"></ol>'}
+        ${playoff ? (prior ? `<div class="po-choice"><label><input type="radio" name="eoMode" value="reuse" checked> Use the order from “${esc(prior.name)}”: <b>${prior.order.map(o => `${o.position}. ${esc(o.display_name)}`).join('  ')}</b></label></div>
+            <div class="po-choice"><label><input type="radio" name="eoMode" value="random"> 🎲 Draw a new random order</label></div>`
+          : '<p class="muted small">🎲 The playoff order is re-drawn at random when you save.</p>') : '<ol class="order-list" id="eoOrder"></ol>'}
         <div class="row" style="margin-top:10px"><button class="btn primary" id="eoSave">Save</button><button class="btn" data-close>Cancel</button></div>`, ($m, close) => {
         const byId = Object.fromEntries(all.map(u => [u.id, u]));
         const render = () => {
@@ -979,7 +993,8 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         };
         render();
         $m.querySelector('#eoSave').onclick = async () => {
-          try { s = await api('PUT', `/api/drafts/${id}/order`, { user_ids: order }); close(); renderAll(); toast('Partners & order saved'); }
+          const mode = $m.querySelector('[name=eoMode]:checked')?.value || 'random';
+          try { s = await api('PUT', `/api/drafts/${id}/order`, { user_ids: order, playoff_order: mode }); close(); renderAll(); toast('Partners & order saved'); }
           catch (e) { toast(e.message, true); }
         };
       });

@@ -101,12 +101,22 @@ function shuffle(arr) {
   return a;
 }
 /** Playoff order: drawn at random for the season's first playoff draft; later ones that season reuse it. */
-function playoffOrder(season, ids) {
-  const prior = db.prepare(`SELECT id, name FROM drafts WHERE kind = 'playoff' AND season = ? AND source = 'app' ORDER BY id LIMIT 1`).get(season);
+/** The most recent earlier playoff draft this season (before draft `beforeId`, if given). */
+function priorPlayoffDraft(season, beforeId = Infinity) {
+  return db.prepare(`SELECT id, name FROM drafts WHERE kind = 'playoff' AND season = ? AND source = 'app' AND id < ? ORDER BY id DESC LIMIT 1`)
+    .get(season, Number.isFinite(beforeId) ? beforeId : Number.MAX_SAFE_INTEGER);
+}
+/**
+ * Playoff order: drawn at random by the server (so it can't be re-rolled from the browser), or —
+ * when `mode` is 'reuse' and an earlier playoff draft exists this season — that draft's order.
+ * Partners new to the reused order are drawn into the remaining slots at random.
+ */
+function playoffOrder(season, ids, mode = 'random', beforeId) {
+  const prior = mode === 'reuse' ? priorPlayoffDraft(season, beforeId) : null;
   if (!prior) return { order: shuffle(ids), notes: randomNote() };
   const prev = db.prepare('SELECT user_id FROM draft_order WHERE draft_id = ? ORDER BY position').all(prior.id).map(r => r.user_id);
   const order = [...prev.filter(id => ids.includes(id)), ...shuffle(ids.filter(id => !prev.includes(id)))];
-  return { order, notes: `Order carried over from "${prior.name}" (drawn at random once per season).` };
+  return { order, notes: `Order carried over from "${prior.name}".` };
 }
 const randomNote = () => `Draft order drawn at random by the app on ${new Date().toLocaleString('en-US', { timeZone: 'America/Toronto', dateStyle: 'medium', timeStyle: 'short' })} (Toronto time)`;
 
@@ -414,7 +424,7 @@ function playoffGames(rounds) {
 }
 
 app.post('/api/drafts', auth, admin, (req, res) => {
-  const { name, season, kind, mode, order_type, warn_secs, user_ids, rounds } = req.body || {};
+  const { name, season, kind, mode, order_type, warn_secs, user_ids, rounds, playoff_order } = req.body || {};
   if (!name?.trim()) fail(400, 'Name is required');
   validateParticipants((user_ids || []).map(Number));
   const k = kind === 'playoff' ? 'playoff' : 'season';
@@ -431,7 +441,7 @@ app.post('/api/drafts', auth, admin, (req, res) => {
   // A later playoff draft that season (e.g. the Final) reuses that order.
   let order = user_ids.map(Number);
   let notes = '';
-  if (k === 'playoff') ({ order, notes } = playoffOrder((season || '').trim(), order));
+  if (k === 'playoff') ({ order, notes } = playoffOrder((season || '').trim(), order, playoff_order === 'reuse' ? 'reuse' : 'random'));
   const id = tx(() => {
     const d = db.prepare(`INSERT INTO drafts (name, season, kind, seat_mode, mode, order_type, warn_secs, created_by, notes)
                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -489,6 +499,14 @@ app.delete('/api/drafts/:id', auth, admin, (req, res) => {
   if (d.status === 'complete' && d.source !== 'import') fail(400, 'Completed drafts are kept for history');
   db.prepare('DELETE FROM drafts WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
+});
+
+app.get('/api/drafts/playoff-prior', auth, admin, (req, res) => {
+  const prior = priorPlayoffDraft(String(req.query.season || '').trim(), req.query.before ? Number(req.query.before) : undefined);
+  if (!prior) return res.json(null);
+  const order = db.prepare(`SELECT o.position, o.user_id, u.display_name FROM draft_order o JOIN users u ON u.id = o.user_id
+                            WHERE o.draft_id = ? ORDER BY o.position`).all(prior.id);
+  res.json({ ...prior, order });
 });
 
 app.get('/api/drafts/next-order', auth, admin, (_req, res) => res.json(nextSeasonOrder()));
@@ -606,10 +624,7 @@ app.put('/api/drafts/:id/order', auth, admin, (req, res) => {
   let ids = (req.body?.user_ids || []).map(Number);
   validateParticipants(ids);
   let notes = d.notes;
-  if (d.kind === 'playoff') {
-    const first = db.prepare(`SELECT id FROM drafts WHERE kind = 'playoff' AND season = ? AND source = 'app' ORDER BY id LIMIT 1`).get(d.season);
-    if (first?.id === d.id) { ids = shuffle(ids); notes = randomNote(); } else ({ order: ids, notes } = playoffOrder(d.season, ids));
-  }
+  if (d.kind === 'playoff') ({ order: ids, notes } = playoffOrder(d.season, ids, req.body?.playoff_order === 'reuse' ? 'reuse' : 'random', d.id));
   tx(() => {
     db.prepare('DELETE FROM draft_order WHERE draft_id = ?').run(id);
     ids.forEach((uid, i) => db.prepare('INSERT INTO draft_order (draft_id, position, user_id) VALUES (?, ?, ?)').run(id, i + 1, uid));
