@@ -585,8 +585,9 @@ app.post('/api/drafts/:id/pick', auth, (req, res) => {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, s.on_clock.overall, s.on_clock.round, s.on_clock.pick_in_round, s.on_clock.user_id, s.on_clock.user_id, gameId, seat, req.user.id, secs, now);
     done = s.picks.length + 1 >= s.draft.total_picks;
-    db.prepare(`UPDATE drafts SET clock_started_at = ?, paused_ms = 0, paused_at = ?, status = ?, completed_at = ? WHERE id = ?`)
-      .run(now, s.draft.paused_at ? now : null, done ? 'complete' : 'live', done ? now : null, id);
+    // A pick always restarts the clock for the next partner — even if it was paused when the pick was made.
+    db.prepare(`UPDATE drafts SET clock_started_at = ?, paused_ms = 0, paused_at = NULL, status = ?, completed_at = ? WHERE id = ?`)
+      .run(now, done ? 'complete' : 'live', done ? now : null, id);
   });
   if (!done && mode === 'async') notifyOnClock(id);
   broadcast(id); broadcast('home');
