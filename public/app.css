@@ -454,3 +454,18 @@ input[type=date], input[type=time] { color-scheme: dark; }
   .suggest .k { font-size: 1.1rem; }
   .suggest .btn { padding: 4px 8px; font-size: .85rem; flex: none; }
 }
+
+/* ---------- time out */
+.timeout-banner { display: flex; align-items: center; gap: 12px; padding: 9px 16px; background: repeating-linear-gradient(135deg, #3a2a0a, #3a2a0a 14px, #33250a 14px, #33250a 28px); border-bottom: 2px solid var(--clock); color: #fff; flex-wrap: wrap; }
+.timeout-banner .ti { font-family: var(--cond); font-weight: 800; font-size: 1.35rem; color: var(--clock); letter-spacing: .06em; animation: blink 1.6s steps(2) infinite; }
+.timeout-banner .tb { font-size: .95rem; }
+.timeout-banner .tb b { font-family: var(--cond); font-size: 1.2rem; color: var(--clock); font-variant-numeric: tabular-nums; }
+.timeout-banner .spacer { flex: 1; }
+body.in-timeout .board .card:not(.taken) { filter: saturate(.55) brightness(.8); cursor: not-allowed; }
+body.in-timeout .board .card:not(.taken):hover { transform: none; box-shadow: none; }
+@media (max-width: 700px) {
+  .timeout-banner { padding: 6px 10px; gap: 8px; flex-wrap: nowrap; }
+  .timeout-banner .ti { font-size: 1.05rem; }
+  .timeout-banner .tn, .timeout-banner .spacer { display: none; }
+  .timeout-banner .tb { flex: 1; min-width: 0; font-size: .85rem; }
+}

@@ -62,9 +62,16 @@ Tags on each draft: **live / setup / complete**, **Season** or **Playoffs**, **�
 - **Round** and **Pick** numbers.
 - **On the clock** — who's picking now. It says **YOU'RE ON THE CLOCK** in yellow when it's you, and your browser tab shows "🍁 YOUR PICK".
 - **Next up** — the next four picks.
-- Small buttons beside the clock: **❚❚ pause** (the commissioner, or you when you're on the clock), **↶ undo** (commissioner), **✉ reminder** (emails whoever is on the clock), **⚙ commissioner controls**.
+- Small buttons beside the clock: **❚❚ pause** (the commissioner, or you when you're on the clock), **↶ undo** (commissioner), **✉ reminder** (emails whoever is on the clock), **⏱ time out** (anyone in the draft), **⚙ commissioner controls**.
 
 When you go on the clock you'll get a pop-up message and a beep.
+
+### Time outs
+Need a minute? **Anyone in the draft** can call a time out with **⏱** (on a phone: **⋯ → Call a time out**).
+- The clock stops and **nobody can pick** until it ends. A yellow **⏸ TIME OUT** banner shows everyone who called it and a countdown.
+- You can still **look through, search and filter** the board — just not pick.
+- It ends when the person who called it taps **▶ Time in**, when a commissioner taps **End time out**, or automatically when the time runs out (**3 minutes** unless the commissioner changed it).
+- Then the clock carries on from where it stopped — the time out doesn't count against the pick.
 
 ### Who's in the draft room
 Under the draft name, each partner has a dot: **green** = has the board open right now, **grey** = away.
@@ -191,7 +198,7 @@ How much each one counts, roughly: favourite opponents count most; preferred/avo
 The site is built to work one-handed on a phone:
 - The menu is behind **☰** (top right).
 - On the board, the top bar scrolls away; a slim header stays on top with the clock, round/pick, who's on the clock, **next up** and the green/grey **who's here** dots.
-- **⋯** opens pause, email reminder, commissioner controls, games and "results so far".
+- **⋯** opens time out / time in, pause, email reminder, commissioner controls, games and "results so far".
 - Use the **search box** or **Filters** (it shows how many filters are on).
 - Games are listed **two across**; the month (or round) heading sticks as you scroll.
 - Tap a game and a big yellow **Draft** button appears at the bottom, naming the game.
@@ -205,7 +212,7 @@ Tip: add the site to your home screen (Share → Add to Home Screen) for one-tap
 ### Setting up a season draft
 1. **Drafts → + New draft**, Draft type **Season draft**.
 2. Check the name and season (it defaults to the next season).
-3. **Order:** Snake (normal) or Linear. **How you'll draft:** Live, or By email over a few days. **Clock warning:** minutes before the red warning (0 = none).
+3. **Order:** Snake (normal) or Linear. **How you'll draft:** Live, or By email over a few days. **Clock warning:** minutes before the red warning (0 = none). **Time-out length:** how long a time out can last (default 3 minutes).
 4. **Participating partners:** untick anyone sitting out. Any number of partners (2+) works.
 5. **Selection order:** last season's order is shown; this year's is pre-filled by rotating it (last pick moves to first). Adjust with ▲▼, **Use rotation** to go back, or **Randomize**.
 6. **Schedule:** the official schedule is preselected; or paste/upload a CSV, enter games by hand, or use a sample for testing. Review the games list (remove/add rows).
@@ -216,6 +223,8 @@ Tip: add the site to your home screen (Share → Add to Home Screen) for one-tap
 
 ### During a draft (⚙ on the board, or ⋯ on a phone)
 - **Pause / resume** the clock (a pick also restarts it).
+- **End time out** — ends anyone's time out.
+- **Settings** — the **time-out length** (default 3 minutes) and the clock-warning time; change them any time.
 - **Restart this pick's clock** — back to 0:00.
 - **Undo last pick** — that partner goes back on the clock.
 - **Restart draft** — clear all picks and start again at pick 1.
@@ -224,6 +233,8 @@ Tip: add the site to your home screen (Share → Add to Home Screen) for one-tap
 - **Games…** — fill in dates, times, opponents, prices and notes; add a game; remove an unpicked one before the draft starts.
 
 ### Partners (menu → Partners)
+**More than one commissioner:** use **Make commissioner** to add a backup who can run the draft if you're away — they get all the same controls. There must always be at least one commissioner.
+
 **Activate / Deactivate** (inactive partners can't log in and aren't offered for new drafts; history stays), **Make / Remove commissioner**, **Reset password** (gives you a link to send by text; also emailed if possible), **Delete** (people with history keep their name on past results).
 
 ### Importing history (History → Import past drafts)
@@ -234,6 +245,8 @@ Match the spreadsheet names (**Q, Abela, Pope**) to accounts and import the seas
 ## 12. FAQ
 
 **Is there a time limit?** No. The clock turns red after the warning time, but you can take as long as you need.
+
+**Someone called a time out — why can't I pick?** Picks are paused for everyone until the time out ends (the banner shows how long is left). You can still browse and filter.
 
 **I picked the wrong game!** Ask the commissioner to **undo** — you'll be back on the clock with the time you'd already used.
 

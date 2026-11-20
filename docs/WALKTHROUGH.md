@@ -85,6 +85,12 @@
 - "Need a break? I can **pause** the clock — or you can, when it's your turn. As soon as someone locks in a pick, the clock starts again for the next person."
 - "If someone's away, I can **draft on their behalf** — the log will show I entered it."
 
+🗣 **Say — time outs:**
+- "Anyone in the draft can call a **time out** with ⏱ — on a phone it's under ⋯. The clock stops and nobody can pick, but you can all keep browsing and filtering."
+- "Everyone sees the yellow banner with a countdown. The person who called it taps **Time in**, or I can end it — otherwise it ends by itself after **3 minutes**. I can change that length."
+
+👉 **Do:** Have a partner call a time out; point out the banner on everyone's screen and that tiles can't be picked; have them tap **Time in**.
+
 ---
 
 ## 6. Your private suggested pick (3 min) — *Profile → Draft preferences, then Board*
@@ -148,6 +154,7 @@
 🗣 **Say:**
 - "On your **Profile**: display name, email, whether you get emails, your **board colour**, and changing your password."
 - "**My drafts** summarizes your picks and value for every draft."
+- *(Commissioner)* "Under **Partners** I can add a **backup commissioner** who can run the draft if I'm away — there's always at least one."
 
 ---
 

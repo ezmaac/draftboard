@@ -13,6 +13,8 @@ These are kept in sync with the code — see `CLAUDE.md`.
 - **Draft board**: home games in columns by month/year (or playoff round), in each opponent's team colours, with the ticket price for the pair of seats (as in the Ticket Tracker). Preseason games carry a `PRE` tag and playoff games a `PO` tag.
 - **Filters**: opponent, day of week (multi-select), game type, free-text search, and **Show** chips — Available, My games, Taken by others — which combine (e.g. Available + My games, or My games + Taken by others for every selected game).
 - **Who's in the draft room**: the board shows which partners have it open right now.
+- **Time outs**: any partner in the draft can call one — the clock stops and picks are blocked (the board stays browsable) until the caller calls time in, a commissioner ends it, or the limit (default 3 minutes, set by the commissioner) runs out.
+- **Backup commissioners**: promote any number of partners to commissioner; at least one is always kept.
 - **Count-up clock**: records how long every pick took. After a configurable warning time (default **2:00**), the clock turns red and the partner on the clock hears a beep. There is **no time limit**. The clock can be paused, and restarts automatically when the next pick is made; the commissioner can undo the last pick or draft on someone's behalf.
 - **Two kinds of draft**
   - **Season draft**: preseason + regular season. Each pick takes the **pair** of seats. The order is snake (or linear), and leftover games go to the first picks in the order.

@@ -157,9 +157,30 @@ function elapsedMs(d, now = Date.now()) {
 // A pair game is one pick; a single-seat game is one pick per seat.
 const totalPicks = (_draft, games) => games.reduce((a, g) => a + (g.single ? g.seats : 1), 0);
 
+// ---- time outs
+const clampTimeout = v => Math.max(30, Math.min(1800, Math.round(Number(v) || 180)));
+const timeoutTimers = new Map();
+/** End a running time out: restart the clock if the time out stopped it, then tell everyone. */
+function endTimeout(id) {
+  const d = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
+  clearTimeout(timeoutTimers.get(id)); timeoutTimers.delete(id);
+  if (!d?.timeout_ends_at) return false;
+  const now = Date.now();
+  if (d.timeout_paused_clock && d.paused_at) db.prepare('UPDATE drafts SET paused_ms = paused_ms + ?, paused_at = NULL WHERE id = ?').run(now - d.paused_at, id);
+  db.prepare('UPDATE drafts SET timeout_by = NULL, timeout_ends_at = NULL, timeout_paused_clock = 0 WHERE id = ?').run(id);
+  broadcast(id); broadcast('home');
+  return true;
+}
+/** Ends the time out on schedule even if nobody has the board open. */
+function scheduleTimeoutEnd(id, endsAt) {
+  clearTimeout(timeoutTimers.get(id));
+  timeoutTimers.set(id, setTimeout(() => endTimeout(id), Math.max(0, endsAt - Date.now()) + 50));
+}
+
 function draftState(id) {
-  const draft = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
+  let draft = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
   if (!draft) fail(404, 'Draft not found');
+  if (draft.timeout_ends_at && draft.timeout_ends_at <= Date.now()) { endTimeout(draft.id); draft = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id); }
   const order = db.prepare(`SELECT o.position, o.user_id, u.display_name, u.username, u.color
                             FROM draft_order o JOIN users u ON u.id = o.user_id
                             WHERE o.draft_id = ? ORDER BY o.position`).all(id);
@@ -175,8 +196,12 @@ function draftState(id) {
       if (!onClock) onClock = s; else upcoming.push(s);
     }
   }
+  const timeout = draft.timeout_ends_at ? {
+    by: draft.timeout_by, by_name: getUser(draft.timeout_by)?.display_name || 'Someone',
+    ends_at: draft.timeout_ends_at, secs: draft.timeout_secs,
+  } : null;
   return {
-    draft: { ...draft, elapsed_ms: elapsedMs(draft), total_picks: total },
+    draft: { ...draft, elapsed_ms: elapsedMs(draft), total_picks: total, timeout },
     order, games, picks, on_clock: onClock, upcoming,
     server_time: Date.now(),
   };
@@ -378,7 +403,7 @@ app.get('/api/drafts', auth, (_req, res) => {
     FROM drafts d ORDER BY d.status = 'complete', d.season DESC, d.id DESC`).all();
   res.json(rows.map(d => {
     const out = { ...d, total_picks: d.pick_slots };
-    if (d.status === 'live') { const s = draftState(d.id); out.on_clock = s.on_clock; out.elapsed_ms = s.draft.elapsed_ms; }
+    if (d.status === 'live') { const s = draftState(d.id); out.on_clock = s.on_clock; out.elapsed_ms = s.draft.elapsed_ms; out.timeout = s.draft.timeout; }
     return out;
   }));
 });
@@ -434,7 +459,7 @@ function playoffGames(rounds) {
 }
 
 app.post('/api/drafts', auth, admin, (req, res) => {
-  const { name, season, kind, mode, order_type, warn_secs, user_ids, rounds, playoff_order } = req.body || {};
+  const { name, season, kind, mode, order_type, warn_secs, user_ids, rounds, playoff_order, timeout_secs } = req.body || {};
   if (!name?.trim()) fail(400, 'Name is required');
   validateParticipants((user_ids || []).map(Number));
   const k = kind === 'playoff' ? 'playoff' : 'season';
@@ -458,6 +483,7 @@ app.post('/api/drafts', auth, admin, (req, res) => {
       .run(name.trim(), (season || '').trim(), k, clean.some(g => g.single) ? (clean.every(g => g.single) ? 'single' : 'mixed') : 'pair', mode === 'async' ? 'async' : 'live',
         order_type === 'linear' ? 'linear' : 'snake', Math.max(0, Number(warn_secs ?? 120) || 0), req.user.id, notes);
     const draftId = Number(d.lastInsertRowid);
+    db.prepare('UPDATE drafts SET timeout_secs = ? WHERE id = ?').run(clampTimeout(timeout_secs ?? 180), draftId);
     const insO = db.prepare('INSERT INTO draft_order (draft_id, position, user_id) VALUES (?, ?, ?)');
     order.forEach((uid, i) => insO.run(draftId, i + 1, uid));
     clean.forEach(g => insertGame(draftId, g));
@@ -571,6 +597,7 @@ app.post('/api/drafts/:id/pick', auth, (req, res) => {
     mode = s.draft.mode;
     if (s.draft.status !== 'live') fail(400, 'Draft is not live');
     if (!s.on_clock) fail(400, 'No pick on the clock');
+    if (s.draft.timeout) fail(409, `Time out called by ${s.draft.timeout.by_name} — picks are paused until time in`);
     const onBehalf = s.on_clock.user_id !== req.user.id;
     if (onBehalf && !req.user.is_admin) fail(403, "It's not your pick");
     const game = s.games.find(g => g.id === gameId);
@@ -606,9 +633,45 @@ app.post('/api/drafts/:id/pause', auth, (req, res) => {
   const d = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
   if (!d || d.status !== 'live') fail(400, 'Draft is not live');
   if (!req.user.is_admin && draftState(id).on_clock?.user_id !== req.user.id) fail(403, 'Only the commissioner or the partner on the clock can pause');
+  if (draftState(id).draft.timeout) fail(400, 'A time out is running — end it first');
   const now = Date.now();
   if (d.paused_at) db.prepare('UPDATE drafts SET paused_ms = paused_ms + ?, paused_at = NULL WHERE id = ?').run(now - d.paused_at, id);
   else db.prepare('UPDATE drafts SET paused_at = ? WHERE id = ?').run(now, id);
+  broadcast(id);
+  res.json(draftState(id));
+});
+
+// Time out: any participant (or commissioner) can call one; it stops the clock and blocks picks.
+// It ends when the caller calls time in, a commissioner ends it, or the time limit runs out.
+app.post('/api/drafts/:id/timeout', auth, (req, res) => {
+  const id = Number(req.params.id);
+  const s = draftState(id);
+  const action = req.body?.action;
+  if (action === 'start') {
+    if (s.draft.status !== 'live') fail(400, 'Draft is not live');
+    if (s.draft.timeout) fail(409, `${s.draft.timeout.by_name} already called a time out`);
+    if (!req.user.is_admin && !s.order.some(o => o.user_id === req.user.id)) fail(403, 'Only partners in this draft can call a time out');
+    const now = Date.now(), endsAt = now + s.draft.timeout_secs * 1000;
+    const stopClock = !s.draft.paused_at;
+    db.prepare(`UPDATE drafts SET timeout_by = ?, timeout_ends_at = ?, timeout_paused_clock = ?, paused_at = COALESCE(paused_at, ?) WHERE id = ?`)
+      .run(req.user.id, endsAt, stopClock ? 1 : 0, now, id);
+    scheduleTimeoutEnd(id, endsAt);
+    broadcast(id); broadcast('home');
+  } else if (action === 'end') {
+    if (!s.draft.timeout) return res.json(draftState(id));
+    if (s.draft.timeout.by !== req.user.id && !req.user.is_admin) fail(403, 'Only the partner who called it or a commissioner can end the time out');
+    endTimeout(id);
+  } else fail(400, 'Unknown action');
+  res.json(draftState(id));
+});
+
+// Draft settings a commissioner can change at any time.
+app.put('/api/drafts/:id/settings', auth, admin, (req, res) => {
+  const id = Number(req.params.id);
+  draftState(id);
+  const { timeout_secs, warn_secs } = req.body || {};
+  if (timeout_secs !== undefined) db.prepare('UPDATE drafts SET timeout_secs = ? WHERE id = ?').run(clampTimeout(timeout_secs), id);
+  if (warn_secs !== undefined) db.prepare('UPDATE drafts SET warn_secs = ? WHERE id = ?').run(Math.max(0, Math.round(Number(warn_secs) || 0)), id);
   broadcast(id);
   res.json(draftState(id));
 });
@@ -629,9 +692,11 @@ app.post('/api/drafts/:id/control', auth, admin, (req, res) => {
     if (d.status !== 'live') fail(400, 'Draft is not live');
     db.prepare('UPDATE drafts SET clock_started_at = ?, paused_ms = 0, paused_at = CASE WHEN paused_at IS NULL THEN NULL ELSE ? END WHERE id = ?').run(now, now, id);
   } else if (action === 'restart') {
+    endTimeout(id);
     tx(() => { clearPicks(); db.prepare("UPDATE drafts SET status = 'live', started_at = ?, completed_at = NULL, clock_started_at = ?, paused_ms = 0, paused_at = NULL WHERE id = ?").run(now, now, id); });
     if (d.mode === 'async') notifyOnClock(id);
   } else if (action === 'reset') {
+    endTimeout(id);
     tx(() => { clearPicks(); db.prepare("UPDATE drafts SET status = 'setup', started_at = NULL, completed_at = NULL, clock_started_at = NULL, paused_ms = 0, paused_at = NULL WHERE id = ?").run(id); });
   } else fail(400, 'Unknown action');
   broadcast(id); broadcast('home'); broadcast('trades');
@@ -671,6 +736,8 @@ app.post('/api/drafts/:id/undo', auth, admin, (req, res) => {
     const now = Date.now();
     db.prepare(`UPDATE drafts SET status = 'live', completed_at = NULL, clock_started_at = ?, paused_ms = 0, paused_at = NULL WHERE id = ?`)
       .run(now - Math.round((last.seconds_taken || 0) * 1000), id);
+    // During a time out the clock stays stopped (it restarts at time in).
+    if (d.timeout_ends_at) db.prepare('UPDATE drafts SET paused_at = ?, timeout_paused_clock = 1 WHERE id = ?').run(now, id);
   });
   broadcast(id); broadcast('home');
   res.json(draftState(id));
@@ -924,5 +991,8 @@ app.use((err, _req, res, _next) => {
   if (!(err instanceof HttpError)) console.error(err);
   res.status(err.status || 500).json({ error: err.status ? err.message : 'Server error' });
 });
+
+// Time outs that were running when the server restarted still end on time.
+for (const d of db.prepare('SELECT id, timeout_ends_at FROM drafts WHERE timeout_ends_at IS NOT NULL').all()) scheduleTimeoutEnd(d.id, d.timeout_ends_at);
 
 app.listen(PORT, () => console.log(`Leafs draft board on http://localhost:${PORT}${mail.enabled ? '' : ' (email not configured: messages are logged)'}`));

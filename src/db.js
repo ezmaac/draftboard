@@ -118,6 +118,11 @@ CREATE TABLE IF NOT EXISTS trade_items (
 const draftCols = db.prepare('PRAGMA table_info(drafts)').all().map(c => c.name);
 if (!draftCols.includes('notes')) db.exec("ALTER TABLE drafts ADD COLUMN notes TEXT NOT NULL DEFAULT ''");
 // 0 for imported seasons where only who-got-which-game was recorded, not the pick sequence.
+// Time outs: any participant can stop the clock and block picks for up to timeout_secs.
+if (!draftCols.includes('timeout_secs')) db.exec('ALTER TABLE drafts ADD COLUMN timeout_secs INTEGER NOT NULL DEFAULT 180');
+if (!draftCols.includes('timeout_by')) db.exec('ALTER TABLE drafts ADD COLUMN timeout_by INTEGER');
+if (!draftCols.includes('timeout_ends_at')) db.exec('ALTER TABLE drafts ADD COLUMN timeout_ends_at INTEGER');
+if (!draftCols.includes('timeout_paused_clock')) db.exec('ALTER TABLE drafts ADD COLUMN timeout_paused_clock INTEGER NOT NULL DEFAULT 0');
 if (!draftCols.includes('order_recorded')) db.exec('ALTER TABLE drafts ADD COLUMN order_recorded INTEGER NOT NULL DEFAULT 1');
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 // Private draft preferences (JSON) used for that partner's suggested picks.

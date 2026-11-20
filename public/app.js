@@ -125,6 +125,7 @@
     $nav.hidden = !state.me || !!opts.any;
     $nav.classList.remove('menu-open'); menuBtn.textContent = '☰';
     document.body.classList.toggle('on-board', view === viewBoard);
+    document.body.classList.remove('in-timeout');
     document.getElementById('navPartners').hidden = !state.me?.is_admin;
     document.querySelectorAll('[data-nav]').forEach(a => {
       const n = a.dataset.nav;
@@ -233,7 +234,7 @@
       <div class="page">
         <h1>Partners</h1>
         <div class="panel">
-          <p class="muted small">Inactive partners can’t log in and aren’t offered for new drafts; their history stays. New partners join with the invite code.</p>
+          <p class="muted small">You can have more than one commissioner — e.g. a backup who can run the draft if you’re away. There must always be at least one. Inactive partners can’t log in and aren’t offered for new drafts; their history stays. New partners join with the invite code.</p>
           <div class="table-wrap"><table>
             <thead><tr><th>Partner</th><th>Username</th><th>Email</th><th>Drafts</th><th>Role</th><th>Status</th><th></th></tr></thead>
             <tbody>${shown.map(u => `<tr>
@@ -297,6 +298,7 @@ const [drafts, users] = await Promise.all([api('GET', '/api/drafts'), api('GET',
             <span class="pill setup">${d.kind === 'playoff' ? 'Playoffs · single seats' : 'Season'}</span>
             ${d.mode === 'async' ? '<span class="pill setup">✉ by email</span>' : ''}${d.source === 'import' ? '<span class="pill setup">imported</span>' : ''}</div>
           <div class="muted small">${esc(d.season)} · ${d.game_count} games · ${d.order_type} order · ${d.pick_count}/${d.total_picks} picks</div>
+          ${d.timeout ? `<div class="small" style="margin-top:4px"><span class="pill live" style="background:#3a2a0a;color:#ffcf3f">⏸ time out</span> called by ${esc(d.timeout.by_name)}</div>` : ''}
           ${oc ? `<div class="small" style="margin-top:4px">${avatar(oc)} <b>${esc(oc.display_name)}</b> on the clock · R${d.on_clock.round} P${d.on_clock.pick_in_round} · ${fmtDur(d.elapsed_ms / 1000)}</div>` : ''}
         </div>
         <div class="row">
@@ -370,7 +372,10 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
               <div class="field" style="flex:1"><label>How you’ll draft</label>
                 <select id="dMode"><option value="live">Live — together, now</option><option value="async">By email — over a few days</option></select></div>
             </div>
-            <div class="field"><label>Clock warning after (minutes, 0 = none — never a hard limit)</label><input type="number" id="dWarn" value="2" min="0" step="0.5"></div>
+            <div class="row" style="align-items:flex-start">
+              <div class="field" style="flex:1"><label>Clock warning after (minutes, 0 = none — never a hard limit)</label><input type="number" id="dWarn" value="2" min="0" step="0.5"></div>
+              <div class="field" style="flex:1"><label>Time-out length (minutes) — any partner can call one</label><input type="number" id="dTO" value="3" min="0.5" max="30" step="0.5"></div>
+            </div>
             <h2 style="margin-top:20px">Participating partners</h2>
             <p class="muted small" style="margin-top:-4px">Untick anyone sitting this draft out. Inactive partners aren’t listed.</p>
             <div class="check-list" id="who"></div>
@@ -570,7 +575,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       try {
         const { id } = await api('POST', '/api/drafts', {
           name: $('#dName').value, season: $('#dSeason').value, kind, mode: $('#dMode').value, order_type: $('#dType').value,
-          warn_secs: Math.round(Number($('#dWarn').value || 0) * 60), user_ids: order, games,
+          warn_secs: Math.round(Number($('#dWarn').value || 0) * 60), timeout_secs: Math.round(Number($('#dTO').value || 3) * 60), user_ids: order, games,
           rounds: poRounds.filter(r => r.include && !poTaken[r.round]).map(r => ({ round: r.round, home_ice: r.home_ice, opponent: r.opponent, price: r.price })),
           playoff_order: poPrior ? poOrderMode : 'random',
         });
@@ -681,6 +686,8 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     let clockBase = 0, clockT0 = 0, warnedFor = null;
     let online = [];  // user ids with this board open (live presence)
     let tip = null;   // my private suggested pick (from my profile preferences)
+    let skew = 0;     // server clock minus this device's clock, for the time-out countdown
+    let toRefreshing = false;
     let selected = null;
     const f = loadFilters();
 
@@ -693,12 +700,14 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     $app.innerHTML = `
       <div class="board-page">
         <div class="board-top" id="boardTop">
+        <div class="timeout-banner" id="toBanner" hidden></div>
         <div class="scoreboard">
           <div class="sb-cell">
             <div class="clock-ctrls">
               <button class="icon-btn" id="pauseBtn" title="Pause / resume clock">❚❚</button>
               <button class="icon-btn" id="undoBtn" title="Undo last pick (commissioner)">↶</button>
               <button class="icon-btn" id="nudgeBtn" title="Email a reminder to whoever is on the clock">✉</button>
+              <button class="icon-btn" id="toBtn" title="Call a time out">⏱</button>
               <button class="icon-btn" id="ctrlBtn" title="Commissioner controls" hidden>⚙</button>
             </div>
             <div><div class="clock" id="clock">00:00</div><div class="clock-sub" id="clockSub">time on the clock</div></div>
@@ -766,13 +775,16 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       const d = s.draft;
       const canPause = d.status === 'live' && (state.me.is_admin || s.on_clock?.user_id === state.me.id);
       modal(`<h2>Draft actions</h2><div class="ctrl-list">
-        ${canPause ? `<button class="btn" data-m="pauseBtn">${d.paused_at ? '▶ Resume clock' : '❚❚ Pause clock'}</button>` : ''}
+        ${d.timeout && (d.timeout.by === state.me.id || state.me.is_admin) ? `<button class="btn go" data-to="end">▶ ${d.timeout.by === state.me.id ? 'Time in' : 'End time out'}</button>` : ''}
+        ${d.status === 'live' && !d.timeout && (inDraft() || state.me.is_admin) ? '<button class="btn" data-to="start">⏱ Call a time out</button>' : ''}
+        ${canPause && !d.timeout ? `<button class="btn" data-m="pauseBtn">${d.paused_at ? '▶ Resume clock' : '❚❚ Pause clock'}</button>` : ''}
         ${d.status === 'live' ? '<button class="btn" data-m="nudgeBtn">✉ Email a reminder to whoever is on the clock</button>' : ''}
         ${state.me.is_admin && d.source !== 'import' ? '<button class="btn" data-m="ctrlBtn">⚙ Commissioner controls</button>' : ''}
         ${state.me.is_admin && d.status !== 'complete' ? '<button class="btn" data-m="addGameBtn">📅 Games…</button>' : ''}
         <a class="btn" href="#/history/${d.id}">📊 Results so far</a>
         </div><div class="row" style="margin-top:12px"><button class="btn" data-close>Close</button></div>`, ($m, close) => {
         $m.querySelectorAll('[data-m]').forEach(b => (b.onclick = () => { close(); $('#' + b.dataset.m).click(); }));
+        $m.querySelectorAll('[data-to]').forEach(b => (b.onclick = () => { close(); b.dataset.to === 'start' ? $('#toBtn').click() : timeout('end'); }));
       });
     };
     $('#fClear').onclick = () => {
@@ -780,7 +792,9 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       $('#fTeam').value = ''; $('#fType').value = ''; $('#fQ').value = ''; syncDow(); renderBoard();
     };
 
-    const myTurn = () => s.draft.status === 'live' && s.on_clock && (s.on_clock.user_id === state.me.id || state.me.is_admin);
+    const myTurn = () => s.draft.status === 'live' && !s.draft.timeout && s.on_clock && (s.on_clock.user_id === state.me.id || state.me.is_admin);
+    const inDraft = () => s.order.some(o => o.user_id === state.me.id);
+    const toLeft = () => (s.draft.timeout ? Math.max(0, s.draft.timeout.ends_at - (Date.now() + skew)) / 1000 : 0);
 
     function renderHeader() {
       const d = s.draft;
@@ -788,6 +802,10 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       const users = usersOf(s);
       $('#pauseBtn').disabled = d.status !== 'live' || !(state.me.is_admin || s.on_clock?.user_id === state.me.id);
       $('#ctrlBtn').hidden = !state.me.is_admin || d.source === 'import';
+      skew = s.server_time - Date.now();
+      $('#toBtn').disabled = d.status !== 'live' || !!d.timeout || !(inDraft() || state.me.is_admin);
+      if (d.timeout) selected = null;
+      renderTimeout();
       $('#pauseBtn').textContent = d.paused_at ? '▶' : '❚❚';
       $('#undoBtn').disabled = !state.me.is_admin || !s.picks.length || d.status === 'setup' || d.source === 'import';
       $('#nudgeBtn').disabled = d.status !== 'live';
@@ -826,8 +844,31 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       tickClock();
     }
 
+    function renderTimeout() {
+      const el = $('#toBanner'); if (!el) return;
+      const t = s.draft.timeout;
+      document.body.classList.toggle('in-timeout', !!t);
+      if (!t) { el.hidden = true; return; }
+      const mine = t.by === state.me.id;
+      el.hidden = false;
+      el.innerHTML = `<span class="ti">⏸ TIME OUT</span>
+        <span class="tb">${mine ? 'You called a time out' : `${esc(t.by_name)} called a time out`} · <b id="toLeft">${fmtDur(toLeft())}</b> left
+          <span class="tn"> · picks are paused — you can still browse and filter</span></span>
+        <span class="spacer"></span>
+        ${mine ? '<button class="btn go sm" id="toEnd">▶ Time in</button>' : state.me.is_admin ? '<button class="btn sm" id="toEnd">End time out</button>' : ''}`;
+      $('#toEnd')?.addEventListener('click', () => timeout('end'));
+    }
+    async function timeout(action) {
+      try { s = await api('POST', `/api/drafts/${id}/timeout`, { action }); renderAll(); }
+      catch (e) { toast(e.message, true); }
+    }
+
     function tickClock() {
       const d = s.draft;
+      if (d.timeout) {
+        const left = toLeft(); const el = $('#toLeft'); if (el) el.textContent = fmtDur(left);
+        if (left <= 0 && !toRefreshing) { toRefreshing = true; setTimeout(() => refresh().finally(() => (toRefreshing = false)), 400); }
+      }
       const running = d.status === 'live' && !d.paused_at;
       const ms = clockBase + (running ? performance.now() - clockT0 : 0);
       const el = $('#clock'); if (!el) return;
@@ -840,7 +881,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         if (s.on_clock.user_id === state.me.id) { beep(); toast(`⏰ ${fmtDur(d.warn_secs)} on the clock — time to pick! (no limit)`); }
       }
       const times = s.picks.map(p => p.seconds_taken).filter(x => x != null);
-      $('#clockSub').textContent = d.paused_at ? 'clock paused' : warn ? `over ${fmtDur(d.warn_secs)} — no limit, just a nudge` :
+      $('#clockSub').textContent = d.timeout ? 'time out' : d.paused_at ? 'clock paused' : warn ? `over ${fmtDur(d.warn_secs)} — no limit, just a nudge` :
         times.length ? `avg pick ${fmtDur(times.reduce((a, b) => a + b, 0) / times.length)}` : 'time on the clock';
     }
 
@@ -981,12 +1022,17 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     // interactions
     $('#board').onclick = e => {
       const c = e.target.closest('[data-game]'); if (!c) return;
+      if (s.draft.timeout) { toast(`⏸ Time out — picks are paused (${fmtDur(toLeft())} left)`); return; }
       const gid = +c.dataset.game;
       selected = selected === gid ? null : gid;
       renderBoard();
     };
-    $('#board').ondblclick = e => { const c = e.target.closest('[data-game]'); if (c) { selected = +c.dataset.game; renderBoard(); confirmPick(); } };
+    $('#board').ondblclick = e => { const c = e.target.closest('[data-game]'); if (c && !s.draft.timeout) { selected = +c.dataset.game; renderBoard(); confirmPick(); } };
     $('#draftBtn').onclick = confirmPick;
+    $('#toBtn').onclick = () => {
+      if (!confirm(`Call a time out? The clock stops and nobody can pick for up to ${fmtDur(s.draft.timeout_secs)}.`)) return;
+      timeout('start');
+    };
 
     function confirmPick() {
       if (!selected || !myTurn()) return;
@@ -1024,18 +1070,32 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         <h2>Commissioner controls</h2>
         <p class="muted small">${esc(d.name)} · ${d.status}${d.paused_at ? ' (paused)' : ''} · ${s.picks.length}/${d.total_picks} picks</p>
         <div class="ctrl-list">
-          <button class="btn" data-c="pause" ${live ? '' : 'disabled'}>${d.paused_at ? '▶ Resume clock' : '❚❚ Pause clock'}</button>
+          ${d.timeout ? `<button class="btn go" data-c="endto">▶ End time out <span class="muted">(called by ${esc(d.timeout.by_name)})</span></button>` : ''}
+          <button class="btn" data-c="pause" ${live && !d.timeout ? '' : 'disabled'}>${d.paused_at && !d.timeout ? '▶ Resume clock' : '❚❚ Pause clock'}</button>
           <button class="btn" data-c="reset_clock" ${live ? '' : 'disabled'}>⟲ Restart this pick’s clock <span class="muted">(back to 0:00)</span></button>
           <button class="btn" data-c="undo" ${s.picks.length && d.status !== 'setup' ? '' : 'disabled'}>↶ Undo last pick</button>
           <button class="btn danger" data-c="restart" ${d.status !== 'setup' ? '' : 'disabled'}>⏮ Restart draft <span class="muted">(clear all picks, start again at pick 1)</span></button>
           <button class="btn danger" data-c="reset" ${d.status !== 'setup' ? '' : 'disabled'}>⟳ Reset to setup <span class="muted">(clear picks, edit partners &amp; order)</span></button>
           <button class="btn" data-c="order" ${d.status === 'setup' ? '' : 'disabled'}>👥 Edit partners &amp; order</button>
         </div>
+        <h3 style="margin-top:14px">Settings</h3>
+        <div class="row" style="align-items:flex-end">
+          <div class="field" style="flex:1"><label>Time-out length (minutes)</label><input type="number" id="setTO" min="0.5" max="30" step="0.5" value="${d.timeout_secs / 60}"></div>
+          <div class="field" style="flex:1"><label>Clock warning (minutes, 0 = none)</label><input type="number" id="setWarn" min="0" step="0.5" value="${d.warn_secs / 60}"></div>
+          <div class="field"><button class="btn" id="setSave">Save</button></div>
+        </div>
         <div class="row" style="margin-top:12px"><button class="btn" data-close>Close</button></div>`, ($m, close) => {
+        $m.querySelector('#setSave').onclick = async () => {
+          try {
+            s = await api('PUT', `/api/drafts/${id}/settings`, { timeout_secs: Math.round(Number($m.querySelector('#setTO').value) * 60), warn_secs: Math.round(Number($m.querySelector('#setWarn').value) * 60) });
+            renderAll(); toast(`Saved — time outs last up to ${fmtDur(s.draft.timeout_secs)}`);
+          } catch (e) { toast(e.message, true); }
+        };
         $m.querySelectorAll('[data-c]').forEach(b => (b.onclick = async () => {
           const c = b.dataset.c; close();
           const traded = d.status === 'complete' ? ' Any trades made from this draft are deleted too.' : '';
-          if (c === 'pause') $('#pauseBtn').click();
+          if (c === 'endto') timeout('end');
+          else if (c === 'pause') $('#pauseBtn').click();
           else if (c === 'undo') $('#undoBtn').click();
           else if (c === 'order') editOrder();
           else if (c === 'reset_clock') control(c);
@@ -1135,10 +1195,12 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
 
     // live updates
     async function refresh() {
-      const prevCount = s.picks.length;
+      const prevCount = s.picks.length, prevTO = s.draft.timeout;
       try { s = await api('GET', `/api/drafts/${id}`); } catch { return; }
       renderAll();
       if (s.picks.length > prevCount && s.on_clock?.user_id === state.me.id) { toast('🍁 You’re on the clock!'); beep(); }
+      if (!prevTO && s.draft.timeout && s.draft.timeout.by !== state.me.id) toast(`⏸ Time out called by ${s.draft.timeout.by_name}`);
+      if (prevTO && !s.draft.timeout) toast('▶ Time in — the clock is running');
     }
     const stop = live(id, refresh, { presence: d => { online = d.online || []; renderPresence(); } });
     const timer = setInterval(tickClock, 250);
