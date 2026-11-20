@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const express = require('express');
 const db = require('./src/db');
 const mail = require('./src/mail');
+const { cleanPrefs, hasPrefs, suggest } = require('./src/suggest');
 const { TEAMS, BY_ABBR, findTeam } = require('./src/teams');
 const { sampleSchedule, parseScheduleCsv, readCsv, normDate, normTime, normPrice, normType, normSeconds } = require('./src/schedule');
 
@@ -251,6 +252,15 @@ app.put('/api/me', auth, (req, res) => {
     .run(display_name?.trim().slice(0, 40) || null, email?.trim() || null, color || null, favorite_player?.trim() || null,
       notify_email === false || notify_email === 'off' ? 0 : 1, req.user.id);
   res.json({ user: publicUser(getUser(req.user.id)) });
+});
+
+// Draft preferences: private — only ever read or written by their owner.
+const prefsOf = u => { try { return cleanPrefs(JSON.parse(u.prefs || '{}')); } catch { return cleanPrefs({}); } };
+app.get('/api/me/prefs', auth, (req, res) => res.json({ prefs: prefsOf(req.user), active: !!hasPrefs(prefsOf(req.user)) }));
+app.put('/api/me/prefs', auth, (req, res) => {
+  const prefs = cleanPrefs(req.body?.prefs || {});
+  db.prepare('UPDATE users SET prefs = ? WHERE id = ?').run(hasPrefs(prefs) ? JSON.stringify(prefs) : null, req.user.id);
+  res.json({ prefs, active: !!hasPrefs(prefs) });
 });
 
 app.put('/api/me/password', auth, (req, res) => {
@@ -510,6 +520,18 @@ app.get('/api/drafts/playoff-prior', auth, admin, (req, res) => {
 });
 
 app.get('/api/drafts/next-order', auth, admin, (_req, res) => res.json(nextSeasonOrder()));
+
+// The requester's own suggested next pick (never anyone else's).
+app.get('/api/drafts/:id/suggestion', auth, (req, res) => {
+  const s = draftState(Number(req.params.id));
+  const prefs = prefsOf(req.user);
+  const inDraft = s.order.some(o => o.user_id === req.user.id);
+  if (!hasPrefs(prefs) || !inDraft || s.draft.status === 'complete') return res.json({ enabled: false, has_prefs: !!hasPrefs(prefs) });
+  let myPicks = 0;
+  for (let i = 0; i < s.draft.total_picks; i++) if (slotFor(i, s.order, s.draft.order_type).user_id === req.user.id) myPicks++;
+  const ranked = suggest(prefs, s, req.user.id, myPicks);
+  res.json({ enabled: true, picks_remaining: Math.max(0, myPicks - s.picks.filter(p => p.user_id === req.user.id).length), top: ranked.slice(0, 3) });
+});
 
 app.get('/api/drafts/:id', auth, (req, res) => res.json(draftState(req.params.id)));
 

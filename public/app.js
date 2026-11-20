@@ -680,6 +680,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
     if (seq !== routeSeq) return;
     let clockBase = 0, clockT0 = 0, warnedFor = null;
     let online = [];  // user ids with this board open (live presence)
+    let tip = null;   // my private suggested pick (from my profile preferences)
     let selected = null;
     const f = loadFilters();
 
@@ -726,6 +727,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
           <button class="btn sm" id="addGameBtn" hidden>Games…</button>
           <button class="btn go" id="draftBtn" disabled>Draft game</button>
         </div>
+        <div class="suggest" id="suggest" hidden></div>
         <div class="banner"><span id="banner"></span>
           <div class="presence" id="presence"></div>
 </div>
@@ -914,6 +916,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
             <div class="opp">${logo(g.opponent, 'light', 'chip')}<span>${esc(t.name)}</span></div>
             ${g.notes ? `<div class="note">★ ${esc(g.notes)}</div>` : ''}
             ${single && gp.length ? `<div class="seats">${left} seat${left === 1 ? '' : 's'} left</div>${gp.map(p => ownerLine(p, users)).join('')}` : ''}
+            ${tip?.enabled && tip.top[0]?.game_id === g.id ? '<span class="tip" title="Your suggested pick">💡</span>' : ''}
           </button>`;
         }).join('');
         return `<section class="month"><div class="month-head">${m.label} <span>${m.year}</span></div>${cards || '<div class="empty-month">No games match</div>'}</section>`;
@@ -936,7 +939,40 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         return `<span><b>${p.round}.${p.pick_in_round}</b>${esc(users[p.user_id].display_name)} / ${fmtGameDate(g)} vs ${logo(g.opponent, 'light', 'xs')}${esc(t.name)}${seatLabel(p)}<span class="t">(${fmtDur(p.seconds_taken)})</span></span>`; }).join('');
     }
 
-    function renderAll() { renderHeader(); renderBoard(); renderTicker(); setStick(); }
+    function renderAll() { renderHeader(); renderBoard(); renderTicker(); setStick(); loadSuggestion(); }
+
+    // --- suggested next pick: computed by the server for me only, from my private preferences
+    async function loadSuggestion() {
+      try { tip = await api('GET', `/api/drafts/${id}/suggestion`); } catch { tip = null; }
+      if (seq !== routeSeq) return;  // left the board meanwhile
+      renderSuggestion(); renderBoard(); setStick();
+    }
+    function renderSuggestion() {
+      const el = $('#suggest'); if (!el) return;
+      if (!tip?.enabled || !tip.top.length) { el.hidden = true; return; }
+      const gm = gid => s.games.find(g => g.id === gid);
+      const best = tip.top[0], g = gm(best.game_id); if (!g) { el.hidden = true; return; }
+      const t = team(g.opponent);
+      const good = best.reasons.filter(r => r.good).slice(0, 2).map(r => esc(r.text)).join(' · ');
+      el.hidden = false;
+      el.innerHTML = `<span class="k">💡<span class="lbl"> ${s.on_clock?.user_id === state.me.id ? 'Your pick — suggested' : 'Your next pick — suggested'}</span></span>
+        <span class="g">${logo(g.opponent, 'dark', 'sm')}${esc(fmtGameDate(g))} · ${esc(t.name)}${g.price ? ` <span class="muted" style="font-weight:600">${fmtMoney(g.price)}</span>` : ''}</span>
+        ${good ? `<span class="why">${good}</span>` : ''}
+        ${tip.top.length > 1 ? `<span class="alts">Also: ${tip.top.slice(1).map(a => { const ag = gm(a.game_id); return ag ? `<button data-alt="${ag.id}">${esc(fmtGameDate(ag))} ${esc(team(ag.opponent).name)}</button>` : ''; }).join(', ')}</span>` : ''}
+        <span class="spacer"></span>
+        <button class="btn sm" id="tipWhy">Why?</button><button class="btn sm go" id="tipSel">Select</button>`;
+      const select = gid => { selected = gid; renderBoard(); $app.querySelector(`[data-game="${gid}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }); };
+      $('#tipSel').onclick = () => select(best.game_id);
+      el.querySelectorAll('[data-alt]').forEach(b => (b.onclick = () => select(+b.dataset.alt)));
+      $('#tipWhy').onclick = () => modal(`<h2>💡 Your suggested picks</h2>
+        <p class="muted small">Based on the preferences in your profile — only you can see this.${tip.picks_remaining ? ` You have ${tip.picks_remaining} pick${tip.picks_remaining === 1 ? '' : 's'} left.` : ''}</p>
+        ${tip.top.map((a, i) => { const ag = gm(a.game_id); if (!ag) return ''; return `<div class="tip-item"><div class="row spread"><b class="with-logo">${logo(ag.opponent, 'dark', 'xs')}${i + 1}. ${esc(fmtGameDate(ag))} · ${esc(team(ag.opponent).city)} ${esc(team(ag.opponent).name)}</b>
+          <button class="btn sm" data-pick="${ag.id}">Select</button></div>
+          <ul>${a.reasons.map(r => `<li class="${r.good ? 'good' : 'bad'}">${r.good ? '✓' : '✗'} ${esc(r.text)}</li>`).join('') || '<li class="muted">Nothing stands out either way — earliest good fit.</li>'}</ul></div>`; }).join('')}
+        <div class="row"><a class="btn" href="#/profile">Edit preferences</a><button class="btn" data-close>Close</button></div>`, ($m, close) => {
+        $m.querySelectorAll('[data-pick]').forEach(b => (b.onclick = () => { close(); select(+b.dataset.pick); }));
+      });
+    }
     // Month/round headings stick just below the board's sticky header on phones.
     function setStick() { const h = $('#boardTop')?.offsetHeight || 0; document.documentElement.style.setProperty('--board-top', `${h}px`); }
     window.addEventListener('resize', setStick);
@@ -1376,6 +1412,7 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
             <button class="btn">Update password</button>
           </form>
         </div>
+        <div class="panel" id="prefsPanel"><p class="muted">Loading preferences…</p></div>
         <div class="panel"><h2>My drafts</h2><div id="myDrafts" class="muted">Loading…</div></div>
       </div>`;
     const $ = sel => $app.querySelector(sel);
@@ -1386,6 +1423,7 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
       try { const { user } = await api('PUT', '/api/me', body); state.me = user; toast('Profile saved'); route(); }
       catch (err) { $('#pErr').textContent = err.message; }
     };
+    renderPrefs(seq);
     $('#pwForm').onsubmit = async e => {
       e.preventDefault();
       try { await api('PUT', '/api/me/password', Object.fromEntries(new FormData(e.target))); e.target.reset(); toast('Password updated'); }
@@ -1406,6 +1444,79 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
     $('#myDrafts').innerHTML = rows.length
       ? `<div class="table-wrap"><table><thead><tr><th>Draft</th><th>Games held</th><th>Value</th><th>Avg pick time</th><th>Draft slot</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
       : 'No picks yet.';
+  }
+
+  // ------------------------------------------------------------ draft preferences (private)
+  async function renderPrefs(seq) {
+    const el = $app.querySelector('#prefsPanel');
+    const { prefs: saved } = await api('GET', '/api/me/prefs');
+    if (seq !== routeSeq || !el) return;
+    const p = JSON.parse(JSON.stringify(saved));
+    const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const seg = (name, value, opts) => `<div class="seg" data-seg="${name}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${value === v ? 'on' : ''} ${v}">${l}</button>`).join('')}</div>`;
+    const render = () => {
+      el.innerHTML = `
+        <div class="row spread"><h2 style="margin:0">Draft preferences</h2><span class="pill setup">🔒 only you can see these</span></div>
+        <p class="muted small">Used to suggest your next pick on the draft board. Everything is optional — leave it all blank and no suggestion is shown.</p>
+        <div class="prefs-grid">
+          <div>
+            <h3>Days of the week</h3>
+            <div class="day-prefs">${DAYS.map((d, i) => `<div class="day-row"><span>${d}</span>${seg(`day${i}`, p.days[i] || 'any', [['prefer', 'Prefer'], ['any', '—'], ['avoid', 'Avoid']])}</div>`).join('')}</div>
+            <h3 style="margin-top:16px">Favourite opponents <span class="muted small">(up to 5, most important first)</span></h3>
+            <ol class="order-list" id="oppList">${p.opponents.map((a, i) => { const t = team(a); return `<li><span class="pos">${i + 1}</span>${logo(a, 'dark', 'sm')}<span class="name">${esc(t.city)} ${esc(t.name)}</span>
+              <button type="button" class="icon-btn" data-oup="${i}" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn" data-odown="${i}" ${i < p.opponents.length - 1 ? '' : 'disabled'}>▼</button>
+              <button type="button" class="icon-btn" data-orm="${i}" title="Remove">✕</button></li>`; }).join('') || '<li class="muted">None yet.</li>'}</ol>
+            ${p.opponents.length < 5 ? `<div class="row"><select id="oppAdd" style="flex:1"><option value="">Add an opponent…</option>${state.teams.filter(t => !t.defunct && !p.opponents.includes(t.abbr)).map(t => `<option value="${t.abbr}">${esc(t.city)} ${esc(t.name)}</option>`).join('')}</select></div>` : ''}
+          </div>
+          <div>
+            <h3>Ticket cost</h3>
+            ${seg('cost', p.cost, [['low', 'Prefer cheaper'], ['any', 'No preference'], ['high', 'Prefer premium']])}
+            <div class="field" style="margin-top:8px"><label>Maximum price for the pair (optional)</label><input type="number" min="0" id="maxPrice" value="${p.max_price ?? ''}" placeholder="e.g. 350"></div>
+            <h3>Preseason games</h3>
+            ${seg('preseason', p.preseason, [['prefer', 'Prefer'], ['any', 'No preference'], ['avoid', 'Avoid']])}
+            <h3 style="margin-top:14px">Start time</h3>
+            ${seg('time', p.time, [['early', 'Earlier starts'], ['any', 'No preference'], ['evening', 'Evening (7 PM+)']])}
+            <h3 style="margin-top:14px">Spread over the season</h3>
+            <label class="toggle" style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" id="spread" ${p.spread ? 'checked' : ''}> Even out my games per month across the season</label>
+            <div class="field" style="margin-top:8px"><label>Keep at least this many days between my games (0 = no preference)</label><input type="number" min="0" max="14" id="minGap" value="${p.min_gap || 0}"></div>
+            <h3>Dates to avoid</h3>
+            <ul class="mini-list" id="avoidList">${p.avoid_dates.map((r, i) => `<li><span>${esc(r.label || 'Unavailable')}: ${esc(r.from)}${r.to !== r.from ? ` → ${esc(r.to)}` : ''}</span><button type="button" class="icon-btn" data-arm="${i}" title="Remove">✕</button></li>`).join('') || '<li class="muted">None.</li>'}</ul>
+            <div class="row avoid-add"><input type="date" id="aFrom" title="From"><input type="date" id="aTo" title="To (optional)"><input type="text" id="aLabel" placeholder="Label, e.g. Florida trip"><button type="button" class="btn sm" id="aAdd">Add</button></div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:14px"><button class="btn primary" id="prefsSave">Save preferences</button><button class="btn" id="prefsClear">Clear all</button><span class="muted small" id="prefsMsg"></span></div>`;
+      const q = sel => el.querySelector(sel), qa = sel => el.querySelectorAll(sel);
+      qa('[data-seg]').forEach(g => g.onclick = e => {
+        const b = e.target.closest('[data-v]'); if (!b) return;
+        const k = g.dataset.seg, v = b.dataset.v;
+        if (k.startsWith('day')) { const d = k.slice(3); if (v === 'any') delete p.days[d]; else p.days[d] = v; }
+        else p[k] = v;
+        render();
+      });
+      const sync = () => { p.max_price = q('#maxPrice').value; p.spread = q('#spread').checked; p.min_gap = q('#minGap').value; };
+      ['#maxPrice', '#minGap'].forEach(id => q(id).oninput = sync); q('#spread').onchange = sync;
+      q('#oppAdd')?.addEventListener('change', e => { if (e.target.value) { sync(); p.opponents.push(e.target.value); render(); } });
+      qa('[data-oup]').forEach(b => b.onclick = () => { sync(); const i = +b.dataset.oup; [p.opponents[i - 1], p.opponents[i]] = [p.opponents[i], p.opponents[i - 1]]; render(); });
+      qa('[data-odown]').forEach(b => b.onclick = () => { sync(); const i = +b.dataset.odown; [p.opponents[i + 1], p.opponents[i]] = [p.opponents[i], p.opponents[i + 1]]; render(); });
+      qa('[data-orm]').forEach(b => b.onclick = () => { sync(); p.opponents.splice(+b.dataset.orm, 1); render(); });
+      qa('[data-arm]').forEach(b => b.onclick = () => { sync(); p.avoid_dates.splice(+b.dataset.arm, 1); render(); });
+      q('#aAdd').onclick = () => {
+        sync();
+        const from = q('#aFrom').value, to = q('#aTo').value || from;
+        if (!from) { toast('Pick a date', true); return; }
+        p.avoid_dates.push({ from, to: to < from ? from : to, label: q('#aLabel').value }); render();
+      };
+      q('#prefsSave').onclick = async () => {
+        sync();
+        try { const r = await api('PUT', '/api/me/prefs', { prefs: p }); Object.assign(p, r.prefs); render(); toast(r.active ? 'Preferences saved — suggestions are on' : 'Saved — no preferences set, so no suggestions'); }
+        catch (e) { toast(e.message, true); }
+      };
+      q('#prefsClear').onclick = async () => {
+        if (!confirm('Clear all your draft preferences? Suggestions will be turned off.')) return;
+        const r = await api('PUT', '/api/me/prefs', { prefs: {} }); Object.keys(p).forEach(k => delete p[k]); Object.assign(p, r.prefs); render(); toast('Preferences cleared');
+      };
+    };
+    render();
   }
 
   // ------------------------------------------------------------ boot

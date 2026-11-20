@@ -120,6 +120,8 @@ if (!draftCols.includes('notes')) db.exec("ALTER TABLE drafts ADD COLUMN notes T
 // 0 for imported seasons where only who-got-which-game was recorded, not the pick sequence.
 if (!draftCols.includes('order_recorded')) db.exec('ALTER TABLE drafts ADD COLUMN order_recorded INTEGER NOT NULL DEFAULT 1');
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+// Private draft preferences (JSON) used for that partner's suggested picks.
+if (!userCols.includes('prefs')) db.exec('ALTER TABLE users ADD COLUMN prefs TEXT');
 if (!userCols.includes('active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
 // Profiles with draft history are "removed" rather than erased so past results stay intact.
 if (!userCols.includes('deleted_at')) db.exec('ALTER TABLE users ADD COLUMN deleted_at INTEGER');

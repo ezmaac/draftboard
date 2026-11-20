@@ -34,6 +34,11 @@ The **first account created becomes the commissioner**, who creates, starts and 
 | `SMTP_URL` | *(unset)* | e.g. `smtps://you%40gmail.com:APP_PASSWORD@smtp.gmail.com`. Unset = emails are only printed to the server log. |
 | `MAIL_FROM` | `Leafs Ticket Draft <no-reply@localhost>` | Sender address |
 
+## Draft preferences & suggested picks
+Each partner can set **private** draft preferences on their Profile page: preferred or avoided days of the week, up to 5 favourite opponents (ranked), cheaper vs premium tickets and a price limit for the pair, preseason games, start time, evening games out across the months of the season, a minimum number of days between games, and dates or date ranges to avoid (e.g. a trip).
+
+On the draft board, a partner with preferences sees **💡 their suggested next pick**, with the reasons, two alternatives and a Select button. It is calculated on the server for the requesting partner only — nobody else (commissioner included) can see another partner's preferences or suggestions. With no preferences set, no suggestion is shown. Scoring lives in `src/suggest.js`.
+
 ## Commissioner tools
 - **Partners** page: activate or deactivate partners (inactive partners can't log in and aren't offered for new drafts), make or remove commissioners, create a password-reset link to send by text, or delete a profile. Deleting someone with draft history keeps their name on past results and removes everything else.
 - **New draft:** pick which partners take part (any number, 2+). The order pre-fills by rotating last season's order (the final pick moves to first), with last season's order shown for reference. Playoff drafts draw a random order.
