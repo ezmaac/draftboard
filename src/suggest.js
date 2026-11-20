@@ -9,12 +9,13 @@ const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
 
 /** Clean user input into a preferences object (unknown or neutral values dropped). */
 function cleanPrefs(p = {}) {
-  const out = { days: {}, opponents: [], cost: 'any', max_price: null, spread: false, preseason: 'any', time: 'any', min_gap: 0, avoid_dates: [] };
+  const out = { days: {}, opponents: [], cost: 'any', repeats: 'any', spread: false, preseason: 'any', time: 'any', min_gap: 0, avoid_dates: [] };
   for (const [d, v] of Object.entries(p.days || {})) if (/^[0-6]$/.test(d) && (v === 'prefer' || v === 'avoid')) out.days[d] = v;
   out.opponents = [...new Set((p.opponents || []).filter(a => BY_ABBR[a] && !BY_ABBR[a].defunct))].slice(0, 5);
-  if (['low', 'high'].includes(p.cost)) out.cost = p.cost;
-  const mp = Number(p.max_price);
-  if (p.max_price !== '' && p.max_price != null && mp > 0) out.max_price = Math.round(mp);
+  // Tickets are already paid for, so cost only ever means "favour the premium games".
+  if (p.cost === 'high') out.cost = 'high';
+  // Repeat opponents: 'prefer' = happy to see the same team again, 'avoid' = prefer variety.
+  if (['prefer', 'avoid'].includes(p.repeats)) out.repeats = p.repeats;
   out.spread = !!p.spread;
   if (['prefer', 'avoid'].includes(p.preseason)) out.preseason = p.preseason;
   if (['early', 'evening'].includes(p.time)) out.time = p.time;
@@ -27,7 +28,7 @@ function cleanPrefs(p = {}) {
 
 /** True when at least one preference is set — otherwise no suggestion is shown. */
 function hasPrefs(p) {
-  return !!p && (Object.keys(p.days).length || p.opponents.length || p.cost !== 'any' || p.max_price || p.spread
+  return !!p && (Object.keys(p.days).length || p.opponents.length || p.cost !== 'any' || p.repeats !== 'any' || p.spread
     || p.preseason !== 'any' || p.time !== 'any' || p.min_gap || p.avoid_dates.length);
 }
 
@@ -79,6 +80,13 @@ function suggest(prefs, state, userId, myPickCount) {
         else if (gap <= -0.5) add(Math.max(-24, 12 * gap), `You already have ${held} in ${monthName} (~${Math.round(target)} is your share)`);
       }
     }
+    if (prefs.repeats !== 'any' && g.opponent !== 'TBD') {
+      const seen = mine.filter(h => h.opponent === g.opponent).length;
+      const name = t ? t.name : g.opponent;
+      if (seen && prefs.repeats === 'prefer') add(12, `Another game vs ${name} — you like repeat opponents`);
+      if (seen && prefs.repeats === 'avoid') add(-18 * seen, `You already have ${seen} vs ${name} — you prefer variety`);
+      if (!seen && prefs.repeats === 'avoid' && mine.length) add(6, `A team you don't have yet`);
+    }
     const rank = prefs.opponents.indexOf(g.opponent);
     if (rank >= 0) add(OPP_POINTS[rank], `vs ${t ? t.name : g.opponent} — your #${rank + 1} opponent`);
     if (g.type === 'preseason') {
@@ -86,11 +94,9 @@ function suggest(prefs, state, userId, myPickCount) {
       if (prefs.preseason === 'avoid') add(-35, 'Preseason game — you avoid these');
     }
     if (g.price != null) {
-      if (prefs.max_price && g.price > prefs.max_price) add(-60, `${money(g.price)} is over your ${money(prefs.max_price)} limit`);
-      if (hi > lo && prefs.cost !== 'any') {
+      if (hi > lo && prefs.cost === 'high') {
         const norm = (g.price - lo) / (hi - lo);
-        if (prefs.cost === 'low') add(20 * (1 - norm), norm < 0.34 ? `Cheaper ticket (${money(g.price)})` : null);
-        if (prefs.cost === 'high') add(20 * norm, norm > 0.66 ? `Premium game (${money(g.price)})` : null);
+        add(25 * norm, norm > 0.66 ? `Premium game (${money(g.price)})` : null);
       }
     }
     if (g.time && prefs.time !== 'any') {

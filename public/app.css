@@ -419,7 +419,7 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
 .seg button { background: #0f141c; border: 0; border-right: 1px solid var(--line); color: var(--muted); padding: 6px 10px; cursor: pointer; font-family: var(--cond); font-weight: 700; font-size: .92rem; }
 .seg button:last-child { border-right: 0; }
 .seg button.on { background: #2b3444; color: #fff; }
-.seg button.on.prefer, .seg button.on.low, .seg button.on.early { background: #1d4d33; color: #8ff0b6; }
+.seg button.on.prefer, .seg button.on.early { background: #1d4d33; color: #8ff0b6; }
 .seg button.on.avoid { background: #4d1d1d; color: #ff9d97; }
 .seg button.on.high, .seg button.on.evening { background: #1d3561; color: #9cc0ff; }
 .day-prefs { display: flex; flex-direction: column; gap: 5px; }

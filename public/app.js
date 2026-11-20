@@ -1470,8 +1470,10 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
           </div>
           <div>
             <h3>Ticket cost</h3>
-            ${seg('cost', p.cost, [['low', 'Prefer cheaper'], ['any', 'No preference'], ['high', 'Prefer premium']])}
-            <div class="field" style="margin-top:8px"><label>Maximum price for the pair (optional)</label><input type="number" min="0" id="maxPrice" value="${p.max_price ?? ''}" placeholder="e.g. 350"></div>
+            ${seg('cost', p.cost, [['high', 'Prioritize premium games'], ['any', 'No preference']])}
+            <h3 style="margin-top:14px">Repeat opponents</h3>
+            ${seg('repeats', p.repeats, [['prefer', 'Happy to repeat'], ['any', 'No preference'], ['avoid', 'Prefer variety']])}
+            <p class="muted small" style="margin:4px 0 0">Do you like seeing the same team more than once in a season?</p>
             <h3>Preseason games</h3>
             ${seg('preseason', p.preseason, [['prefer', 'Prefer'], ['any', 'No preference'], ['avoid', 'Avoid']])}
             <h3 style="margin-top:14px">Start time</h3>
@@ -1493,8 +1495,8 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
         else p[k] = v;
         render();
       });
-      const sync = () => { p.max_price = q('#maxPrice').value; p.spread = q('#spread').checked; p.min_gap = q('#minGap').value; };
-      ['#maxPrice', '#minGap'].forEach(id => q(id).oninput = sync); q('#spread').onchange = sync;
+      const sync = () => { p.spread = q('#spread').checked; p.min_gap = q('#minGap').value; };
+      q('#minGap').oninput = sync; q('#spread').onchange = sync;
       q('#oppAdd')?.addEventListener('change', e => { if (e.target.value) { sync(); p.opponents.push(e.target.value); render(); } });
       qa('[data-oup]').forEach(b => b.onclick = () => { sync(); const i = +b.dataset.oup; [p.opponents[i - 1], p.opponents[i]] = [p.opponents[i], p.opponents[i - 1]]; render(); });
       qa('[data-odown]').forEach(b => b.onclick = () => { sync(); const i = +b.dataset.odown; [p.opponents[i + 1], p.opponents[i]] = [p.opponents[i], p.opponents[i + 1]]; render(); });
