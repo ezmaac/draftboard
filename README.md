@@ -2,11 +2,18 @@
 
 A draft room for splitting Toronto Maple Leafs season-ticket games between partners. Everyone drafts from their own device, wherever they are.
 
+## Documentation
+- [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — how to use the app (for the partners)
+- [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md) — script for introducing the app, screen by screen
+- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — full build specification (hand this to an AI coding assistant to rebuild the app)
+
+These are kept in sync with the code — see `CLAUDE.md`.
+
 ## Features
-- **Draft board**: home games in columns by month/year, colour-coded by the opponent's division, with the ticket price for the pair of seats (as in the Ticket Tracker). Preseason games carry a `PRE` tag and playoff games a `PO` tag.
+- **Draft board**: home games in columns by month/year (or playoff round), in each opponent's team colours, with the ticket price for the pair of seats (as in the Ticket Tracker). Preseason games carry a `PRE` tag and playoff games a `PO` tag.
 - **Filters**: opponent, day of week (multi-select), game type, free-text search, and **Show** chips — Available, My games, Taken by others — which combine (e.g. Available + My games, or My games + Taken by others for every selected game).
 - **Who's in the draft room**: the board shows which partners have it open right now.
-- **Count-up clock**: records how long every pick took. After a configurable warning time (default **2:00**), the clock turns red and the partner on the clock hears a beep. There is **no time limit**. The clock can be paused; the commissioner can undo the last pick or draft on someone's behalf.
+- **Count-up clock**: records how long every pick took. After a configurable warning time (default **2:00**), the clock turns red and the partner on the clock hears a beep. There is **no time limit**. The clock can be paused, and restarts automatically when the next pick is made; the commissioner can undo the last pick or draft on someone's behalf.
 - **Two kinds of draft**
   - **Season draft**: preseason + regular season. Each pick takes the **pair** of seats. The order is snake (or linear), and leftover games go to the first picks in the order.
   - **Playoff draft**: run separately, closer to the playoffs. Games are picked by **round and game number** (home ice: games 1, 2, 5, 7; otherwise 3, 4, 6), and each playoff draft covers the rounds you choose — e.g. rounds 1–3 first, then the Final. Rounds 1–3 are picked as pairs; the Final (round 4) one seat at a time. Dates and opponents can be filled in later (**Games…** on the board). When a season already has a playoff draft, the next one can **reuse its order or draw a new random order**. Each pick takes **one seat**, so two partners can end up at the same game (one partner may take both seats if both are still open on their turn). The order is **drawn at random by the app** when the draft is created, so it can't be re-rolled. Games can be added as they're scheduled (opponent can be `TBD`).
