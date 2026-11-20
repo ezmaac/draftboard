@@ -3,13 +3,14 @@
 Private draft app for splitting Toronto Maple Leafs season tickets among partners. Node 22 + Express 5 + built-in `node:sqlite`; vanilla-JS single-page front end in `public/` (no build step). Run with `npm install && npm start` (http://localhost:3000).
 
 ## Keep the documentation in sync (required)
-Three documents in `docs/` describe the app and **must be updated in the same change** whenever behaviour, screens, settings, data formats or rules change:
+Four documents in `docs/` describe the app and **must be updated in the same change** whenever behaviour, screens, settings, data formats or rules change:
 
 | Document | Audience | Update when… |
 |---|---|---|
 | `docs/REQUIREMENTS.md` | AI/developer rebuilding the app | Any behaviour, rule, screen, API route, schema column, env var, data-import rule or scoring weight changes. Keep the acceptance checklist (§13) true. |
 | `docs/USER_GUIDE.md` | The partners | Anything a user sees or does changes (screens, buttons, options, wording, phone layout, FAQ). |
 | `docs/WALKTHROUGH.md` | The commissioner presenting the app | A screen or headline feature is added, removed or changes how it's demonstrated. |
+| `docs/ARCHITECTURE.md` | Anyone wanting the big picture | Components, data storage/tables, dependencies, API route count, live-update approach, hosting or configuration change. |
 
 Also update `README.md` when setup, configuration or deployment changes. Bump the "Last updated" date in each document you touch. Before finishing a change, re-read the relevant sections and confirm they still match the code.
 

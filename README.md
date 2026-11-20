@@ -6,6 +6,7 @@ A draft room for splitting Toronto Maple Leafs season-ticket games between partn
 - [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — how to use the app (for the partners)
 - [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md) — script for introducing the app, screen by screen
 - [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — full build specification (hand this to an AI coding assistant to rebuild the app)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — plain-language overview of how the app is built and how data is managed
 
 These are kept in sync with the code — see `CLAUDE.md`.
 
