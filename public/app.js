@@ -42,6 +42,8 @@
   /** Team logo <img>; 'light' variant for light/coloured backgrounds, 'dark' for dark ones. Hidden if it fails to load. */
   const logo = (abbr, variant = 'dark', cls = '') => (state.logoUrl && abbr && abbr !== 'TBD'
     ? `<img class="logo ${cls}" src="${esc(state.logoUrl.replace('{abbr}', abbr).replace('{variant}', variant))}" alt="" loading="lazy" onerror="this.remove()">` : '');
+  // Team-coloured tile: main colour background, second colour stripe, readable text.
+  const teamStyle = t => (t.color ? `style="--bg:${t.color};--ac:${t.accent};--fg:${t.text}"` : '');
   const gameName = g => { const t = team(g.opponent); return `${fmtGameDate(g)} · ${t.city} ${t.name}`; };
   const anySingle = s => s.games.some(g => g.single);
   const seatLabel = p => (p.seat ? ` · seat ${p.seat}` : '');
@@ -726,7 +728,7 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
         </div>
         <div class="banner"><span id="banner"></span>
           <div class="presence" id="presence"></div>
-          <div class="legend" style="justify-content:center;margin-top:2px"><span><i style="background:var(--atl)"></i>Atlantic</span><span><i style="background:var(--met)"></i>Metropolitan</span><span><i style="background:var(--cen)"></i>Central</span><span><i style="background:var(--pac)"></i>Pacific</span></div></div>
+</div>
         </div>
         <div class="board" id="board"></div>
         <div class="ticker"><div class="tag">🍁 PICKS</div><div class="track"><div class="scroll" id="ticker"></div></div></div>
@@ -790,7 +792,6 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
       $('#addGameBtn').hidden = !(state.me.is_admin && d.status !== 'complete');
       $('#fType').hidden = new Set(s.games.map(g => g.type)).size < 2;
       $('#fDow').hidden = !s.games.some(g => g.date);
-      $('.legend').hidden = s.draft.kind === 'playoff';
       renderPresence();
       $('#rnd').textContent = s.on_clock ? s.on_clock.round : d.status === 'complete' ? '✓' : '–';
       $('#pk').textContent = s.on_clock ? s.on_clock.pick_in_round : '–';
@@ -906,11 +907,11 @@ const [allUsers, files, rot] = await Promise.all([api('GET', '/api/users'), api(
               <div class="top"><span>${badge}${fmtGameDate(g)}</span><span>${t.abbr}</span></div>
               <div class="opp">${logo(g.opponent, 'dark', 'sm muted-logo')}<span>${esc(t.name)}</span></div><div class="by"><span class="slot" style="margin-left:0">${esc(g.notes || 'not drafted')}</span></div></div>`;
           }
-          return `<button class="card ${t.div} ${selected === g.id ? 'selected' : ''}" data-game="${g.id}">
+          return `<button class="card tc ${t.color ? '' : 'TBD'} ${selected === g.id ? 'selected' : ''}" ${teamStyle(t)} data-game="${g.id}">
             <div class="top">${g.round ? `<span>${badge}Game ${g.game_no}</span><span>${g.date ? `${fmtDay(g)}${g.time ? ` · ${fmtTime(g.time)}` : ''}` : 'Date TBD'}</span>`
               : `<span>${badge}${fmtGameDate(g)}</span><span>${fmtTime(g.time)}</span>`}</div>
             <div class="city"><span>${esc(t.city)}${single ? ' <span class="tbadge" style="background:#4b2a8a">1 SEAT</span>' : ''}</span><span title="Price for the pair">${fmtMoney(g.price)}</span></div>
-            <div class="opp">${logo(g.opponent, 'light')}<span>${esc(t.name)}</span></div>
+            <div class="opp">${logo(g.opponent, 'light', 'chip')}<span>${esc(t.name)}</span></div>
             ${g.notes ? `<div class="note">★ ${esc(g.notes)}</div>` : ''}
             ${single && gp.length ? `<div class="seats">${left} seat${left === 1 ? '' : 's'} left</div>${gp.map(p => ownerLine(p, users)).join('')}` : ''}
           </button>`;
@@ -1177,7 +1178,7 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
     const cell = p => {
       if (!p) return '<span class="muted">—</span>';
       const g = gameMap[p.game_id]; const t = team(g.opponent);
-      return `<div class="rg-cell card ${t.div}" style="cursor:default"><div class="d">${fmtGameDate(g)}${seatLabel(p)}</div><div class="o">${logo(g.opponent, 'light', 'sm')}<span>${esc(t.name)}</span></div><div class="s">#${p.overall}${imported ? '' : ` · ${fmtDur(p.seconds_taken)}`}${g.price ? ` · ${fmtMoney(pickValue(p, g))}` : ''}</div></div>`;
+      return `<div class="rg-cell card tc ${t.color ? '' : 'TBD'}" ${teamStyle(t)}><div class="d">${fmtGameDate(g)}${seatLabel(p)}</div><div class="o">${logo(g.opponent, 'light', 'sm chip')}<span>${esc(t.name)}</span></div><div class="s">#${p.overall}${imported ? '' : ` · ${fmtDur(p.seconds_taken)}`}${g.price ? ` · ${fmtMoney(pickValue(p, g))}` : ''}</div></div>`;
     };
     const stats = uid => {
       const drafted = s.picks.filter(p => p.user_id === uid);
@@ -1214,7 +1215,7 @@ const [s, trades] = await Promise.all([api('GET', `/api/drafts/${id}`), api('GET
                 <div class="stat"><div class="v">${fmtDur(st.max)}</div><div class="k">Longest</div></div>`}
               </div>
               <ul class="mini-list">${st.held.slice().sort((a, b) => gameSort(gameMap[a.game_id], gameMap[b.game_id])).map(p => { const g = gameMap[p.game_id];
-                return `<li><span class="with-logo">${logo(g.opponent, 'dark', 'xs')}${fmtGameDate(g)} · ${esc(team(g.opponent).name)}${seatLabel(p)}${p.owner_id !== p.user_id ? ` <span class="muted" title="Drafted by ${esc(users[p.user_id].display_name)}">⇄ via trade</span>` : ''}</span><span>${orderKnown ? `#${p.overall}` : ''}${p.seconds_taken != null ? ` · ${fmtDur(p.seconds_taken)}` : ''}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
+                return `<li><span class="with-logo">${logo(g.opponent, 'dark', 'xs')}${fmtGameDate(g)} · ${esc(team(g.opponent).name)}${seatLabel(p)}${p.owner_id !== p.user_id ? ` <span class="muted" title="Drafted by ${esc(users[p.user_id].display_name)}">⇄ via trade</span>` : ''}</span><span>${[orderKnown ? `#${p.overall}` : '', g.price ? fmtMoney(pickValue(p, g)) : ''].filter(Boolean).join(' · ')}</span></li>`; }).join('') || '<li class="muted">No picks</li>'}</ul>
             </div>`; }).join('')}
         </div>
         ${accepted.length ? `<p class="muted small">Holdings above include ${accepted.length} completed trade${accepted.length > 1 ? 's' : ''}; the round grid and log show the original draft.</p>` : ''}

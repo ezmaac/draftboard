@@ -401,3 +401,13 @@ th { font-family: var(--cond); text-transform: uppercase; letter-spacing: .05em;
   .draft-item .row .btn { flex: 1; }
   .auth-card { padding: 22px 18px; }
 }
+
+/* ---------- team-coloured tiles */
+.card.tc { background: var(--bg); color: var(--fg); border-top: 4px solid var(--ac); }
+.card.tc .city span:first-child { opacity: .85; }
+.card.tc .tbadge { background: rgba(0,0,0,.55); color: #fff; }
+.card.tc.TBD { background: #cfd6e2; color: var(--card-ink); border-top-color: #9aa3b2; }
+.logo.chip { background: #fff; border-radius: 50%; padding: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.15); }
+.rg-cell.card.tc { cursor: default; border-top-width: 3px; }
+/* Selection must show on any team colour (incl. gold tiles): white ring + yellow halo. */
+.card.tc.selected { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 7px var(--clock), 0 8px 20px rgba(0,0,0,.55); z-index: 1; }
