@@ -1,6 +1,6 @@
 # 🍁 Leafs Ticket Draft — User Guide
 
-*For the ticket partners. Last updated: 2026-11-20.*
+*For the ticket partners. Last updated: 2026-11-23.*
 
 Leafs Ticket Draft is our private website for splitting the Maple Leafs season tickets. It replaces the Ticket Tracker spreadsheet: we draft games on a shared board, trade afterwards, and keep every year's results back to 2002-03.
 
@@ -29,7 +29,7 @@ It works on a computer, tablet or phone, and everyone sees picks the moment they
 ### Create your account
 1. Open the site link the commissioner sent you.
 2. Tap **Sign up**.
-3. Choose a **username**, enter your **display name** (what the others see, e.g. "Rob A"), your **email** (for "you're on the clock" and trade emails, and password resets), a **password** (6+ characters), and the **invite code** from the commissioner.
+3. Choose a **username**, enter your **display name** (what the others see, e.g. "Rob A"), your **email** (for "you're on the clock" and trade emails, and password resets), a **password** (6+ characters — tap **Show** to check what you typed), and the **invite code** from the commissioner.
 4. Tap **Create account**. You're logged in and stay logged in on that device for 30 days.
 
 > The first person to sign up becomes the **commissioner** (the one who sets up drafts). Everyone else is a partner.
@@ -171,7 +171,7 @@ The other partner gets an email and sees a number on their **Trades** menu. They
 
 - **Display name, email, favourite Leaf, board colour** (your colour on the board and history).
 - **Email me…** — turn "you're on the clock" and trade emails on or off (password-reset emails always come through).
-- **Change password** — enter your current one and a new one.
+- **Change password** — enter your current one and a new one. Tap **Show** in a password box to see what you typed (tap **Hide** to cover it again) — this works on the login and reset screens too.
 - **My drafts** — your games, value, average pick time and draft slot for each draft.
 
 ### Draft preferences (🔒 only you can see these)
@@ -236,6 +236,9 @@ Tip: add the site to your home screen (Share → Add to Home Screen) for one-tap
 **More than one commissioner:** use **Make commissioner** to add a backup who can run the draft if you're away — they get all the same controls. There must always be at least one commissioner.
 
 **Activate / Deactivate** (inactive partners can't log in and aren't offered for new drafts; history stays), **Make / Remove commissioner**, **Reset password** (gives you a link to send by text; also emailed if possible), **Delete** (people with history keep their name on past results).
+
+### The invite code
+New partners need the **invite code** to sign up. It isn't shown in the app — it's a setting on the server, so it can't be seen on anyone's screen. To change it, see "Changing the invite code" in the project's `README.md` (on a hosted site: `fly secrets set INVITE_CODE=NewCode`). Changing it doesn't affect existing accounts; it only matters for new sign-ups.
 
 ### Importing history (History → Import past drafts)
 Match the spreadsheet names (**Q, Abela, Pope**) to accounts and import the seasons converted from the Ticket Tracker workbook; or import a single draft from a CSV (one row per pick: Pick, Partner, Date, Team, …).

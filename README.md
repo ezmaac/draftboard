@@ -38,11 +38,19 @@ The **first account created becomes the commissioner**, who creates, starts and 
 | Env var | Default | Purpose |
 |---|---|---|
 | `PORT` | `3000` | HTTP port |
-| `INVITE_CODE` | `goleafsgo` | Code needed to sign up. **Change it.** |
+| `INVITE_CODE` | `goleafsgo` | Code needed to sign up. **Change it** (see below). |
 | `DB_FILE` | `data/draftboard.db` | SQLite database file |
 | `APP_URL` | `http://localhost:PORT` | Public URL, used for links in emails |
 | `SMTP_URL` | *(unset)* | e.g. `smtps://you%40gmail.com:APP_PASSWORD@smtp.gmail.com`. Unset = emails are only printed to the server log. |
 | `MAIL_FROM` | `Leafs Ticket Draft <no-reply@localhost>` | Sender address |
+
+### Changing the invite code
+The invite code is a server setting — it is not shown or editable inside the app (so it can't leak from a partner's screen). It is only needed when someone **signs up**; changing it never affects existing accounts.
+- **Running on your computer:** start the app with the new code, e.g. `INVITE_CODE=MyNewCode npm start` (Windows PowerShell: `$env:INVITE_CODE="MyNewCode"; npm start`), or put `INVITE_CODE=MyNewCode` in your environment.
+- **Hosted on Fly.io:** `fly secrets set INVITE_CODE=MyNewCode` — Fly restarts the app with the new code.
+- **Other hosts:** set the `INVITE_CODE` environment variable in the host's settings and restart.
+
+Tip: once all partners have signed up, set it to something long and random so no one else can create an account.
 
 ## Draft preferences & suggested picks
 Each partner can set **private** draft preferences on their Profile page: preferred or avoided days of the week, up to 5 favourite opponents (ranked), whether to prioritize premium (most expensive) games, repeat opponents (happy to see a team again vs prefer variety), preseason games, start time, evening games out across the months of the season, a minimum number of days between games, and dates or date ranges to avoid (e.g. a trip).

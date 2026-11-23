@@ -1,6 +1,6 @@
 # 🍁 Leafs Ticket Draft — Walkthrough Script
 
-*A script for introducing the app to the ticket partners, screen by screen. About 25–30 minutes. Last updated: 2026-11-20.*
+*A script for introducing the app to the ticket partners, screen by screen. About 25–30 minutes. Last updated: 2026-11-23.*
 
 **How to use this:** read the **🗣 Say** lines (in your own words), do the **👉 Do** steps on your screen, and pause at **❓ Ask** points. Share your screen on a call, or sit together with a laptop and phones.
 
@@ -8,7 +8,7 @@
 
 ## Before the session (presenter checklist)
 - [ ] The site is running and you know its link (hosted, or a temporary tunnel link).
-- [ ] You've changed the **invite code** from the default and have it ready to share.
+- [ ] You've changed the **invite code** from the default (`INVITE_CODE` setting — see README "Changing the invite code"; hosted: `fly secrets set INVITE_CODE=…`) and have it ready to share.
 - [ ] Your commissioner account exists (sign up **first** so you're the commissioner).
 - [ ] **History imported:** History → Import past drafts → map Q / Abela / Pope → Import selected. *(Partners must have signed up first — so do this **during** the session, step 2, or ahead of time if they've already joined.)*
 - [ ] A **practice draft** created (New draft → season → 2027-28 or a test season, *not started*), so you can start it live.
@@ -29,7 +29,7 @@
 👉 **Do:** Send the link and the **invite code**. Have each partner tap **Sign up**.
 
 🗣 **Say:**
-- "Pick a username and password, and use the display name you want us to see."
+- "Pick a username and password — tap **Show** to check you typed it right — and use the display name you want us to see."
 - "Please add your **email** — that's how you'll get 'you're on the clock' messages, trade requests, and password resets."
 - "You stay logged in on that device for a month. If you ever forget your password, there's a **Forgot your password?** link, or I can send you a reset link."
 

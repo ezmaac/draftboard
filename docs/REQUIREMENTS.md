@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** A complete, self-contained specification for (re)building the Leafs Ticket Draft web application. Give it to an AI coding assistant (Claude Code, Antigravity, etc.) or a developer, together with the data files listed in §14, and ask them to build the app. It describes *what* the app must do and the decisions already made, plus the reference architecture of the current build.
 >
-> **Keep this document current.** Every change to the app's behaviour must be reflected here (see `CLAUDE.md`). Last updated: 2026-11-20 (time outs, backup commissioners).
+> **Keep this document current.** Every change to the app's behaviour must be reflected here (see `CLAUDE.md`). Last updated: 2026-11-23 (show/hide password toggle; invite code management).
 
 ---
 
@@ -27,7 +27,7 @@ Core ideas:
 | **Commissioner** | First account created; **any number of others can be promoted** (e.g. a backup) | Everything a partner can, plus: end anyone's time out, set the time-out length, create/start/delete drafts, choose participants and order, draft on behalf of anyone, pause/resume, undo, restart/reset drafts, edit games, import history, manage partners (activate/deactivate, promote, reset password links, delete) |
 
 Rules:
-- Sign-up requires an **invite code** (env `INVITE_CODE`). The **first** account becomes commissioner.
+- Sign-up requires an **invite code** (env `INVITE_CODE`). It is a server setting only — never displayed or editable in the app; changing it affects only future sign-ups. The **first** account becomes commissioner.
 - **Multiple commissioners** are allowed (e.g. a backup to run the draft when the main one is away); all have the same powers.
 - There must always be **at least one active commissioner** (block demoting/deactivating/deleting the last one).
 - A commissioner cannot deactivate or delete their own account.
@@ -145,7 +145,7 @@ Sort by score (ties → earlier game). Return the **top 3** with reasons (each r
 
 Navigation (top bar): **Drafts · History · Trades · Partners** (commissioner only) **· Profile · Log out**. On phones (≤700px) the links collapse behind a ☰ menu.
 
-1. **Log in / Sign up** — username, password; sign-up adds display name, email, invite code. "Forgot your password?" link.
+1. **Log in / Sign up** — username, password; sign-up adds display name, email, invite code. "Forgot your password?" link. **Every password box (here, Reset password and Profile) has a Show/Hide toggle** (switches the input between hidden and visible text; accessible label/pressed state).
 2. **Forgot password** — username or email → emails a single-use reset link valid 2 hours. Always answers the same way (no account discovery). If email isn't configured, says so and suggests asking the commissioner.
 3. **Reset password** (`#/reset/<token>`) — new password + confirm; logs the user in; ends other sessions.
 4. **Drafts (home)** — current drafts (live/setup) with status pills, kind, mode, "who's on the clock and for how long", a "⏸ time out" note when one is running, buttons (Enter draft room / Your pick → / Preview board / Start draft / Delete); the latest four past drafts with a link to all. Commissioner: **+ New draft**.

@@ -469,3 +469,9 @@ body.in-timeout .board .card:not(.taken):hover { transform: none; box-shadow: no
   .timeout-banner .tn, .timeout-banner .spacer { display: none; }
   .timeout-banner .tb { flex: 1; min-width: 0; font-size: .85rem; }
 }
+
+/* ---------- show/hide password */
+.pw-wrap { position: relative; }
+.pw-wrap input { padding-right: 64px; }
+.pw-toggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 4px; padding: 3px 9px; cursor: pointer; font-family: var(--cond); font-weight: 700; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; }
+.pw-toggle:hover, .pw-toggle[aria-pressed="true"] { color: #fff; border-color: #4a5870; }

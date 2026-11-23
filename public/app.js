@@ -162,7 +162,7 @@
         <div class="field"><label>Username</label><input type="text" name="username" required autocomplete="username"></div>
         ${mode === 'register' ? `<div class="field"><label>Display name</label><input type="text" name="display_name" placeholder="e.g. Mark"></div>
         <div class="field"><label>Email <span class="muted">(for “you’re on the clock” and trade alerts)</span></label><input type="email" name="email" autocomplete="email"></div>` : ''}
-        <div class="field"><label>Password</label><input type="password" name="password" required autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></div>
+        <div class="field"><label>Password</label><div class="pw-wrap"><input type="password" name="password" required autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"><button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false">Show</button></div></div>
         ${mode === 'register' ? `<div class="field"><label>Invite code</label><input type="text" name="invite_code" required></div>` : ''}
         <p class="error" id="authErr"></p>
         <button class="btn primary" style="width:100%">${mode === 'login' ? 'Log in' : 'Create account'}</button>
@@ -208,8 +208,8 @@
     $app.innerHTML = `
       <div class="auth-wrap"><form class="auth-card" id="rForm">
         <div style="font-size:2.4rem">🍁</div><h1>Choose a new<br>password</h1>
-        <div class="field"><label>New password</label><input type="password" name="password" required minlength="6" autocomplete="new-password"></div>
-        <div class="field"><label>Confirm new password</label><input type="password" name="confirm" required minlength="6" autocomplete="new-password"></div>
+        <div class="field"><label>New password</label><div class="pw-wrap"><input type="password" name="password" required minlength="6" autocomplete="new-password"><button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false">Show</button></div></div>
+        <div class="field"><label>Confirm new password</label><div class="pw-wrap"><input type="password" name="confirm" required minlength="6" autocomplete="new-password"><button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false">Show</button></div></div>
         <p class="error" id="rErr"></p>
         <button class="btn primary" style="width:100%">Set password &amp; log in</button>
       </form></div>`;
@@ -1468,8 +1468,8 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
           </form>
           <form class="panel" id="pwForm">
             <h2>Change password</h2>
-            <div class="field"><label>Current password</label><input type="password" name="current" required autocomplete="current-password"></div>
-            <div class="field"><label>New password</label><input type="password" name="next" required minlength="6" autocomplete="new-password"></div>
+            <div class="field"><label>Current password</label><div class="pw-wrap"><input type="password" name="current" required autocomplete="current-password"><button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false">Show</button></div></div>
+            <div class="field"><label>New password</label><div class="pw-wrap"><input type="password" name="next" required minlength="6" autocomplete="new-password"><button type="button" class="pw-toggle" aria-label="Show password" aria-pressed="false">Show</button></div></div>
             <p class="error" id="pwErr"></p>
             <button class="btn">Update password</button>
           </form>
@@ -1587,6 +1587,17 @@ const [drafts, trades, users] = await Promise.all([api('GET', '/api/drafts'), ap
   const menuBtn = document.getElementById('menuBtn');
   menuBtn.onclick = () => { const open = $nav.classList.toggle('menu-open'); menuBtn.setAttribute('aria-expanded', open); menuBtn.textContent = open ? '✕' : '☰'; };
   document.getElementById('mainNav').addEventListener('click', e => { if (e.target.closest('a, button')) { $nav.classList.remove('menu-open'); menuBtn.textContent = '☰'; } });
+  // Show/hide toggle for every password box (markup: .pw-wrap > input + .pw-toggle).
+  document.addEventListener('click', e => {
+    const b = e.target.closest('.pw-toggle'); if (!b) return;
+    const input = b.parentElement.querySelector('input');
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    b.textContent = show ? 'Hide' : 'Show';
+    b.setAttribute('aria-pressed', String(show));
+    b.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    input.focus();
+  });
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/logout'); state.me = null; location.hash = '#/login'; };
   window.addEventListener('hashchange', route);
   (async () => {
