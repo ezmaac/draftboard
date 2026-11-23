@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node --no-warnings server.js",
-    "dev": "node --no-warnings --watch server.js"
+    "dev": "node --no-warnings --watch server.js",
+    "test": "node --no-warnings --test \"test/**/*.test.js\"",
+    "seed": "node --no-warnings tools/seed.js"
   },
   "engines": {
     "node": ">=22.13"

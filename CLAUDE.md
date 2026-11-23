@@ -6,14 +6,14 @@ Private draft app for splitting Toronto Maple Leafs season tickets among partner
 ```bash
 npm install
 npm start                                   # http://localhost:3000
-DB_FILE=/tmp/dev.db PORT=3999 npm start     # throwaway database — use this when testing changes
-curl localhost:3999/healthz                 # → ok
+npm test                                    # API + unit tests, ~2 s — must pass before committing
+npm run seed                                # demo database data/dev.db (--force to rebuild)
+DB_FILE=data/dev.db npm start               # log in as quinn (commissioner), abela or pope; password leafs123
 ```
-- There is no automated test suite yet. To check a change, run the app against a throwaway `DB_FILE` and exercise it in a browser (Playwright is available in cloud sessions).
-- The first account registered becomes the commissioner; the default invite code is `goleafsgo`. Register 2–3 accounts to test drafts, and load `schedules/TML_2026-2027.csv` (42 games) for a season draft.
-- Check phone layout at 390px width (no horizontal scroll) as well as desktop.
-- `docs/REQUIREMENTS.md` §13 is the acceptance checklist; re-check the items your change touches.
-- Never point a dev run at `data/draftboard.db` if it holds real data.
+- **Tests:** `test/*.test.js`, Node's built-in runner (`node:test`), no test libraries. Each file starts the real server on its own temp database via `tools/lib/harness.js` and drives the JSON API; shared builders (`league`, `seasonDraft`, `pickN`, `rejects`…) are in `test/helpers.js`. When you change or add a rule, add or update a test in the matching file. Tests are organised by `docs/REQUIREMENTS.md` §13 items.
+- **UI changes:** the tests don't cover screens. Run on the seeded database and check in a browser (Playwright is available in cloud sessions), at desktop width and at 390px phone width (no horizontal scroll).
+- The first account registered becomes the commissioner; the default invite code is `goleafsgo`.
+- Never point a dev run or the seed script at `data/draftboard.db` if it holds real data.
 
 ## Keep the documentation in sync (required)
 Four documents in `docs/` describe the app and **must be updated in the same change** whenever behaviour, screens, settings, data formats or rules change:
@@ -31,6 +31,7 @@ Also update `README.md` when setup, configuration (env vars) or deployment chang
 - `server.js` — API routes, auth, draft/clock/trade logic, SSE live updates (`broadcast()`)
 - `src/db.js` — SQLite schema + additive migrations; `src/teams.js` — teams, colours; `src/schedule.js` — CSV parsing; `src/suggest.js` — preferences and suggested-pick scoring; `src/mail.js` — email (logs to console when `SMTP_URL` is unset)
 - `public/` — `index.html`, `app.css`, `app.js` (hash-routed SPA)
+- `test/` — automated tests; `tools/seed.js` — demo data; `tools/lib/harness.js` — starts the server for both
 - `tools/convert_ticket_tracker.py` — converts the partners' workbook into `history/` (needs `openpyxl`; the workbook itself is not in the repo, so don't regenerate `history/` without it)
 - `schedules/` — bundled official schedules; `history/` — converted past drafts
 - Env vars (`PORT`, `INVITE_CODE`, `DB_FILE`, `APP_URL`, `SMTP_URL`, `MAIL_FROM`, `LOGO_URL`) are listed in `README.md` and `REQUIREMENTS.md` §11.

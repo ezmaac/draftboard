@@ -35,6 +35,14 @@ npm start           # http://localhost:3000
 
 The **first account created becomes the commissioner**, who creates, starts and deletes drafts and imports history.
 
+**Demo data and tests** (no extra installs):
+```bash
+npm run seed                    # data/dev.db: 3 partners, all bundled history, a live draft and a playoff draft
+DB_FILE=data/dev.db npm start   # log in as quinn (commissioner), abela or pope — password leafs123
+npm test                        # API and unit tests (~2 s); each test file runs the server on its own temp database
+```
+`npm run seed -- --force` replaces an existing `data/dev.db`; `--db <file>` writes elsewhere; `--no-history` skips the history import. The seed never touches `data/draftboard.db` unless you point it there and pass `--force`.
+
 | Env var | Default | Purpose |
 |---|---|---|
 | `PORT` | `3000` | HTTP port |
@@ -91,3 +99,4 @@ Other options: Render or Railway (needs a paid plan with a disk), or any small V
 - `server.js`: Express API, auth (scrypt + session cookies), draft/trade logic, imports, Server-Sent Events.
 - `src/db.js`: SQLite schema. `src/schedule.js`: CSV parsing. `src/mail.js`: email. `src/teams.js`: NHL teams.
 - `public/`: single-page front end (vanilla JS, no build step).
+- `test/`: automated tests (`npm test`, Node's built-in test runner). `tools/seed.js`: demo data (`npm run seed`). Both start the real server via `tools/lib/harness.js`.

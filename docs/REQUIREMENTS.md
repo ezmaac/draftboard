@@ -2,7 +2,7 @@
 
 > **Purpose of this document.** A complete, self-contained specification for (re)building the Leafs Ticket Draft web application. Give it to an AI coding assistant (Claude Code, Antigravity, etc.) or a developer, together with the data files listed in §14, and ask them to build the app. It describes *what* the app must do and the decisions already made, plus the reference architecture of the current build.
 >
-> **Keep this document current.** Every change to the app's behaviour must be reflected here (see `CLAUDE.md`). Last updated: 2026-11-20 (time outs, backup commissioners).
+> **Keep this document current.** Every change to the app's behaviour must be reflected here (see `CLAUDE.md`). Last updated: 2026-11-23 (automated tests and demo seed script).
 
 ---
 
@@ -289,7 +289,7 @@ Live: `GET events/:key` (SSE).
 Single Node process + SQLite file on a **persistent volume**. Provided: `Dockerfile` (node:22-slim, `DB_FILE=/data/draftboard.db`, port 8080) and `fly.toml` (Toronto region `yyz`, volume `draftboard_data` at `/data`, HTTPS forced, `/healthz` check). Recommended host: Fly.io (~US$2–5/month). Back up the database file periodically.
 
 ## 13. Acceptance checklist
-A rebuild is complete when all of these work:
+A rebuild is complete when all of these work. `npm test` (files in `test/`, Node's built-in test runner, no dependencies) checks items 1–10 and 12 through the API against a throwaway database; item 11 (phone layout) and the on-screen parts (banners, beeps, colours) are checked by hand. `npm run seed` (`tools/seed.js`) builds a demo database — partners `quinn` (commissioner), `abela`, `pope`, password `leafs123`; all bundled history; a live season draft five picks in; a playoff draft in setup — for trying the screens. Keep the tests passing and add a test when a rule changes.
 1. First sign-up becomes commissioner; invite code enforced; inactive users can't log in.
 2. Season draft from the bundled 2026-27 CSV: 42 games → 14 picks each, snake order, rotation pre-filled from last season.
 3. Clock counts up, warns at 2:00 (no limit), pauses, and **restarts automatically after a pick made while paused**; times exclude paused time.

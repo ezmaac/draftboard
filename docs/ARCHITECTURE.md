@@ -1,6 +1,6 @@
 # Leafs Ticket Draft — Architecture Overview
 
-*A plain-language summary of how the app is built and how its data is managed. Last updated: 2026-11-20.*
+*A plain-language summary of how the app is built and how its data is managed. Last updated: 2026-11-23.*
 
 > Keep this document current: any change to the app's components, data storage, dependencies, hosting or live-update approach must be reflected here (see `CLAUDE.md`). For full technical detail see §10 of [`REQUIREMENTS.md`](REQUIREMENTS.md).
 
@@ -61,6 +61,11 @@ A **full-stack** web app — browser front end, server back end and database —
 - **Automatic upgrades:** new columns are added when the server starts, so updates don't wipe existing data.
 - **Reference data ships with the app as files:** the official 2026-27 schedule (`schedules/`), 24 seasons of converted history (`history/`), and the team list and colours (in code).
 - **One separate, offline tool:** a Python script (`tools/convert_ticket_tracker.py`) converted the partners' Excel workbook into the history files. It is run by hand when needed and is not part of the running app.
+
+## Developer tools — not part of the running app
+- **Automated tests** (`test/`, run with `npm test`): Node's built-in test runner, no extra libraries. Each test file starts the real server on its own temporary database and drives it through the same JSON API the browser uses, covering the acceptance checklist in `REQUIREMENTS.md` §13 (except the phone layout). Takes about 2 seconds.
+- **Demo data** (`tools/seed.js`, run with `npm run seed`): builds a separate database (`data/dev.db` by default) with three partners, all bundled history, a live draft and a playoff draft — also through the API, so the data always follows the app's rules.
+- Both use a small shared helper (`tools/lib/harness.js`) that starts the server and keeps a login cookie.
 
 ## 4. What it needs to run
 | Need | Detail |
